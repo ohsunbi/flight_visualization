@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import io
+from dataclasses import replace
 from datetime import date, datetime, timedelta
 
 import pandas as pd
@@ -12,7 +13,61 @@ from flight_timeline import (
     build_timeline_figure,
     departures_from_ubikais,
 )
-from ubikais_client import UbikaisQuery, fetch_records_for_airlines
+from ubikais_client import UbikaisQuery, fetch_records
+
+try:
+    from ubikais_client import fetch_records_for_airlines
+except ImportError:
+    def fetch_records_for_airlines(
+        direction,
+        query,
+        airlines,
+        *,
+        cache_dir="cache",
+        refresh=False,
+        cookie_header=None,
+    ):
+        normalized_airlines = []
+        for airline in airlines:
+            airline_code = str(airline).strip().upper()
+            if airline_code and airline_code not in normalized_airlines:
+                normalized_airlines.append(airline_code)
+
+        if not normalized_airlines:
+            raise ValueError("At least one airline code is required.")
+
+        merged_records = []
+        fetched_at_values = []
+
+        for airline_code in normalized_airlines:
+            airline_query = replace(query, airline=airline_code)
+            payload = fetch_records(
+                direction,
+                airline_query,
+                cache_dir=cache_dir,
+                refresh=refresh,
+                cookie_header=cookie_header,
+            )
+            if payload.get("fetched_at"):
+                fetched_at_values.append(int(payload["fetched_at"]))
+            for record in payload.get("records") or []:
+                merged_records.append({**record, "airlineCode": airline_code})
+
+        return {
+            "status": "success",
+            "direction": direction,
+            "query": {
+                "flight_date": query.date_text,
+                "airlines": normalized_airlines,
+                "departure_airport": query.departure_airport,
+                "arrival_airport": query.arrival_airport,
+                "flight_number": query.flight_number,
+                "limit": query.limit,
+            },
+            "fetched_at": max(fetched_at_values) if fetched_at_values else None,
+            "total": len(merged_records),
+            "records": merged_records,
+        }
 
 
 st.set_page_config(page_title="Flight Handling Schedule", layout="wide")
