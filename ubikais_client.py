@@ -5,7 +5,7 @@ import time
 from dataclasses import asdict, dataclass, replace
 from datetime import date
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any, Literal, Optional, Union
 from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 
@@ -41,16 +41,16 @@ def fetch_records(
     direction: Direction,
     query: UbikaisQuery,
     *,
-    cache_dir: str | Path = "cache",
+    cache_dir: Union[str, Path] = "cache",
     refresh: bool = False,
-    cookie_header: str | None = None,
+    cookie_header: Optional[str] = None,
 ) -> dict[str, Any]:
     cache_path = _cache_path(cache_dir, direction, query)
     if cache_path.exists() and not refresh:
         return json.loads(cache_path.read_text(encoding="utf-8"))
 
     records: list[dict[str, Any]] = []
-    total: int | None = None
+    total: Optional[int] = None
     offset = 0
 
     while True:
@@ -92,9 +92,9 @@ def fetch_records_for_airlines(
     query: UbikaisQuery,
     airlines: list[str],
     *,
-    cache_dir: str | Path = "cache",
+    cache_dir: Union[str, Path] = "cache",
     refresh: bool = False,
-    cookie_header: str | None = None,
+    cookie_header: Optional[str] = None,
 ) -> dict[str, Any]:
     normalized_airlines = []
     for airline in airlines:
@@ -142,7 +142,7 @@ def _request_page(
     direction: Direction,
     query: UbikaisQuery,
     offset: int,
-    cookie_header: str | None,
+    cookie_header: Optional[str],
 ) -> dict[str, Any]:
     params = {
         "downloadYn": 1,
@@ -180,7 +180,7 @@ def _request_page(
         ) from exc
 
 
-def _cache_path(cache_dir: str | Path, direction: Direction, query: UbikaisQuery) -> Path:
+def _cache_path(cache_dir: Union[str, Path], direction: Direction, query: UbikaisQuery) -> Path:
     safe_airline = query.airline or "ALL"
     safe_flight = query.flight_number or "ALL"
     safe_dep = query.departure_airport or "ANY"
