@@ -13,6 +13,9 @@ from matplotlib import transforms
 
 F_BEFORE = 20
 F_AFTER = 10
+MAX_ROWS_PER_PANEL = 18
+A4_LANDSCAPE_WIDTH = 11.69
+A4_LANDSCAPE_HEIGHT = 8.27
 
 COL_ARR = "#1f77b4"
 COL_DEP = "#d62728"
@@ -29,19 +32,20 @@ class TimelineConfig:
     arr_after: int = 30
     show_flt: bool = True
     show_reg: bool = False
-    show_memo: bool = False
+    show_spot: bool = False
 
 
 def departures_from_ubikais(records: list[dict[str, Any]]) -> pd.DataFrame:
     df = pd.DataFrame(records)
     if df.empty:
-        return pd.DataFrame(columns=["FLT", "REG", "MEMO", "ATD", "ETD", "STD"])
+        return pd.DataFrame(columns=["FLT", "REG", "TYP", "SPOT", "ATD", "ETD", "STD"])
 
     return pd.DataFrame(
         {
             "FLT": _series_or_blank(df, "fpId"),
             "REG": _series_or_blank(df, "acId"),
-            "MEMO": _build_memo_series(df, "depStatus", "standDep"),
+            "TYP": _series_or_blank(df, "acType"),
+            "SPOT": _series_or_blank(df, "standDep"),
             "ATD": _series_or_blank(df, "atd"),
             "ETD": _series_or_blank(df, "etd"),
             "STD": _series_or_blank(df, "schTime"),
@@ -52,13 +56,14 @@ def departures_from_ubikais(records: list[dict[str, Any]]) -> pd.DataFrame:
 def arrivals_from_ubikais(records: list[dict[str, Any]]) -> pd.DataFrame:
     df = pd.DataFrame(records)
     if df.empty:
-        return pd.DataFrame(columns=["FLT", "REG", "MEMO", "ATA", "ETA", "STA"])
+        return pd.DataFrame(columns=["FLT", "REG", "TYP", "SPOT", "ATA", "ETA", "STA"])
 
     return pd.DataFrame(
         {
             "FLT": _series_or_blank(df, "fpId"),
             "REG": _series_or_blank(df, "acId"),
-            "MEMO": _build_memo_series(df, "arrStatus", "standArr"),
+            "TYP": _series_or_blank(df, "acType"),
+            "SPOT": _series_or_blank(df, "standArr"),
             "ATA": _series_or_blank(df, "ata"),
             "ETA": _series_or_blank(df, "eta"),
             "STA": _series_or_blank(df, "sta"),
@@ -112,9 +117,14 @@ def build_timeline_figure(
     total_dep = len(dep_block)
     total_arr = len(arr_block)
     visible_rows = max(total_dep, total_arr, 1)
-    fig_height = max(6.3, visible_rows * 0.24 + 2.5)
-    fig, ax = plt.subplots(figsize=(11.7, fig_height))
-    fig.subplots_adjust(left=0.04, right=0.82, top=0.90, bottom=0.18)
+    panel_count = max(1, math.ceil(visible_rows / MAX_ROWS_PER_PANEL))
+    rows_per_panel = max(1, math.ceil(visible_rows / panel_count))
+    dep_wrapped = _assign_wrap_rows(dep_block, rows_per_panel)
+    arr_wrapped = _assign_wrap_rows(arr_block, rows_per_panel)
+
+    fig_height = max(A4_LANDSCAPE_HEIGHT, rows_per_panel * 0.28 + 3.0)
+    fig, ax = plt.subplots(figsize=(A4_LANDSCAPE_WIDTH, fig_height))
+    fig.subplots_adjust(left=0.04, right=0.98, top=0.90, bottom=0.18)
 
     ax.set_title("Flight Handling Timeline")
     ax.text(
@@ -138,18 +148,20 @@ def build_timeline_figure(
         color="#333333",
     )
 
-    _plot_split_timeline(
+    _plot_wrapped_timeline(
         ax,
-        dep_block,
-        arr_block,
+        dep_block=dep_wrapped,
+        arr_block=arr_wrapped,
+        panel_count=panel_count,
+        rows_per_panel=rows_per_panel,
         x_start=start_time,
         x_end=end_time,
     )
     _plot_overlap_numbers(
         ax,
-        mid_times,
-        dep_counts,
-        arr_counts,
+        mid_times=mid_times,
+        dep_counts=dep_counts,
+        arr_counts=arr_counts,
     )
 
     summary = {
@@ -157,6 +169,7 @@ def build_timeline_figure(
         "end_time": end_time,
         "total_dep": total_dep,
         "total_arr": total_arr,
+        "panel_count": panel_count,
         "dep_records": dep_plot,
         "arr_records": arr_plot,
     }
@@ -190,10 +203,10 @@ def _prepare_departures(dep_df: pd.DataFrame, config: TimelineConfig) -> pd.Data
         lambda row: label_for(
             row["FLT"],
             row.get("REG", ""),
-            row.get("MEMO", ""),
+            row.get("SPOT", ""),
             show_flt=config.show_flt,
             show_reg=config.show_reg,
-            show_memo=config.show_memo,
+            show_spot=config.show_spot,
         ),
         axis=1,
     )
@@ -227,21 +240,23 @@ def _prepare_arrivals(arr_df: pd.DataFrame, config: TimelineConfig) -> pd.DataFr
         lambda row: label_for(
             row["FLT"],
             row.get("REG", ""),
-            row.get("MEMO", ""),
+            row.get("SPOT", ""),
             show_flt=config.show_flt,
             show_reg=config.show_reg,
-            show_memo=config.show_memo,
+            show_spot=config.show_spot,
         ),
         axis=1,
     )
     return arr_df
 
 
-def _plot_split_timeline(
+def _plot_wrapped_timeline(
     ax,
     dep_block: pd.DataFrame,
     arr_block: pd.DataFrame,
     *,
+    panel_count: int,
+    rows_per_panel: int,
     x_start,
     x_end,
 ) -> None:
@@ -264,17 +279,11 @@ def _plot_split_timeline(
         return
 
     dep_labeled = False
-    for y_pos, (_, row) in enumerate(dep_block.iterrows()):
+    for _, row in dep_block.iterrows():
+        y_pos = row["wrap_row"]
         legend_label = "Departure" if not dep_labeled else ""
         dep_labeled = True
-        ax.plot(
-            [row["start"], row["end"]],
-            [y_pos, y_pos],
-            color=COL_DEP,
-            linewidth=4,
-            label=legend_label,
-            zorder=2,
-        )
+        ax.plot([row["start"], row["end"]], [y_pos, y_pos], color=COL_DEP, linewidth=4, label=legend_label, zorder=2)
         if row["Label"]:
             ax.text(
                 row["end"] + timedelta(minutes=5),
@@ -285,14 +294,7 @@ def _plot_split_timeline(
                 color=COL_DEP,
                 clip_on=False,
             )
-        ax.scatter(
-            row["marker"],
-            y_pos,
-            color=COL_DEP,
-            s=28,
-            marker="o",
-            zorder=3,
-        )
+        ax.scatter(row["marker"], y_pos, color=COL_DEP, s=28, marker="o", zorder=3)
         ax.text(
             row["marker"] - timedelta(minutes=3),
             y_pos + 0.15,
@@ -304,18 +306,11 @@ def _plot_split_timeline(
         )
 
     arr_labeled = False
-    for y_pos, (_, row) in enumerate(arr_block.iterrows()):
-        row_y = y_pos + 0.55
+    for _, row in arr_block.iterrows():
+        row_y = row["wrap_row"] + 0.55
         legend_label = "Arrival" if not arr_labeled else ""
         arr_labeled = True
-        ax.plot(
-            [row["start"], row["end"]],
-            [row_y, row_y],
-            color=COL_ARR,
-            linewidth=4,
-            label=legend_label,
-            zorder=2,
-        )
+        ax.plot([row["start"], row["end"]], [row_y, row_y], color=COL_ARR, linewidth=4, label=legend_label, zorder=2)
         if row["Label"]:
             ax.text(
                 row["end"] + timedelta(minutes=5),
@@ -326,14 +321,7 @@ def _plot_split_timeline(
                 color=COL_ARR,
                 clip_on=False,
             )
-        ax.scatter(
-            row["marker"],
-            row_y,
-            color=COL_ARR,
-            s=28,
-            marker="s",
-            zorder=3,
-        )
+        ax.scatter(row["marker"], row_y, color=COL_ARR, s=28, marker="s", zorder=3)
         ax.text(
             row["marker"] - timedelta(minutes=3),
             row_y + 0.15,
@@ -344,7 +332,7 @@ def _plot_split_timeline(
             color=COL_ARR,
         )
 
-    ax.set_ylim(-0.75, max(len(dep_block), len(arr_block)) + 0.2)
+    ax.set_ylim(-0.75, rows_per_panel + 0.2)
     ax.legend(loc="upper left")
 
 
@@ -388,6 +376,18 @@ def _plot_overlap_numbers(
             )
 
 
+def _assign_wrap_rows(block: pd.DataFrame, rows_per_panel: int) -> pd.DataFrame:
+    if block.empty:
+        return block.assign(wrap_panel=pd.Series(dtype=int), wrap_row=pd.Series(dtype=float))
+
+    wrapped = block.copy()
+    wrapped["wrap_panel"] = wrapped.index // rows_per_panel
+    wrapped["wrap_row"] = wrapped.index % rows_per_panel
+    return wrapped
+
+
+
+
 def hhmm_to_datetime(base_date: date, hhmm: Any, service_start_hour: int):
     if pd.isna(hhmm):
         return None
@@ -420,19 +420,19 @@ def hhmm_to_datetime(base_date: date, hhmm: Any, service_start_hour: int):
 def label_for(
     flt: Any,
     reg: Any,
-    memo: Any = None,
+    spot: Any = None,
     *,
     show_flt: bool,
     show_reg: bool,
-    show_memo: bool,
+    show_spot: bool,
 ) -> str:
     parts = []
     if show_flt:
         parts.append(str(flt).replace("ESR", "ZE"))
     if show_reg and pd.notna(reg) and str(reg).strip():
         parts.append(str(reg))
-    if show_memo and pd.notna(memo) and str(memo).strip():
-        parts.append(str(memo))
+    if show_spot and pd.notna(spot) and str(spot).strip():
+        parts.append(f"#{str(spot).strip()}")
     return " / ".join(parts)
 
 
@@ -462,17 +462,3 @@ def _series_or_blank(df: pd.DataFrame, column: str) -> pd.Series:
     if column in df.columns:
         return df[column]
     return pd.Series([""] * len(df))
-
-
-def _build_memo_series(df: pd.DataFrame, status_col: str, stand_col: str) -> pd.Series:
-    status = _series_or_blank(df, status_col).astype(str).str.strip()
-    stand = _series_or_blank(df, stand_col).astype(str).str.strip()
-    values = []
-    for item_status, item_stand in zip(status, stand):
-        parts = []
-        if item_status and item_status.lower() != "nan":
-            parts.append(item_status)
-        if item_stand and item_stand.lower() != "nan":
-            parts.append(f"SPT {item_stand}")
-        values.append(" / ".join(parts))
-    return pd.Series(values)

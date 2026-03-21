@@ -21,7 +21,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--arr-after", type=int, default=30)
     parser.add_argument("--hide-flt", action="store_true")
     parser.add_argument("--show-reg", action="store_true")
-    parser.add_argument("--show-memo", action="store_true")
+    parser.add_argument("--show-spot", action="store_true")
     parser.add_argument("--show", action="store_true", help="Open a matplotlib window after saving the image.")
     parser.add_argument("--refresh", action="store_true", help="Ignore cached JSON and fetch again.")
     parser.add_argument("--cache-dir", default="cache")
@@ -86,7 +86,7 @@ def main() -> None:
         arr_after=args.arr_after,
         show_flt=not args.hide_flt,
         show_reg=args.show_reg,
-        show_memo=args.show_memo,
+        show_spot=args.show_spot,
     )
 
     fig, summary = build_timeline_figure(dep_df, arr_df, config)

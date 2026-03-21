@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 import time
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from datetime import date
 from pathlib import Path
 from typing import Any, Literal
@@ -85,6 +85,56 @@ def fetch_records(
     cache_path.parent.mkdir(parents=True, exist_ok=True)
     cache_path.write_text(json.dumps(result, ensure_ascii=False, indent=2), encoding="utf-8")
     return result
+
+
+def fetch_records_for_airlines(
+    direction: Direction,
+    query: UbikaisQuery,
+    airlines: list[str],
+    *,
+    cache_dir: str | Path = "cache",
+    refresh: bool = False,
+    cookie_header: str | None = None,
+) -> dict[str, Any]:
+    normalized_airlines = []
+    for airline in airlines:
+        airline_code = str(airline).strip().upper()
+        if airline_code and airline_code not in normalized_airlines:
+            normalized_airlines.append(airline_code)
+
+    if not normalized_airlines:
+        raise ValueError("At least one airline code is required.")
+
+    merged_records: list[dict[str, Any]] = []
+    fetched_at_values: list[int] = []
+
+    for airline_code in normalized_airlines:
+        airline_query = replace(query, airline=airline_code)
+        payload = fetch_records(
+            direction,
+            airline_query,
+            cache_dir=cache_dir,
+            refresh=refresh,
+            cookie_header=cookie_header,
+        )
+
+        if payload.get("fetched_at"):
+            fetched_at_values.append(int(payload["fetched_at"]))
+
+        for record in payload.get("records") or []:
+            merged_records.append({**record, "airlineCode": airline_code})
+
+    return {
+        "status": "success",
+        "direction": direction,
+        "query": {
+            **_serialize_query(query),
+            "airlines": normalized_airlines,
+        },
+        "fetched_at": max(fetched_at_values) if fetched_at_values else None,
+        "total": len(merged_records),
+        "records": merged_records,
+    }
 
 
 def _request_page(

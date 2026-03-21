@@ -12,7 +12,7 @@ from flight_timeline import (
     build_timeline_figure,
     departures_from_ubikais,
 )
-from ubikais_client import UbikaisQuery, fetch_records
+from ubikais_client import UbikaisQuery, fetch_records_for_airlines
 
 
 st.set_page_config(page_title="Flight Handling Schedule", layout="wide")
@@ -20,6 +20,8 @@ st.set_page_config(page_title="Flight Handling Schedule", layout="wide")
 
 if "base_date" not in st.session_state:
     st.session_state.base_date = date.today()
+if "selected_airlines" not in st.session_state:
+    st.session_state.selected_airlines = ["ESR"]
 
 
 def _normalize_base_date() -> None:
@@ -38,7 +40,19 @@ def _next_day() -> None:
     st.session_state.base_date = st.session_state.base_date + timedelta(days=1)
 
 
+def _normalize_airlines() -> None:
+    normalized = []
+    for airline in st.session_state.get("selected_airlines", []):
+        airline_code = str(airline).strip().upper()
+        if airline_code and airline_code not in normalized:
+            normalized.append(airline_code)
+    st.session_state.selected_airlines = normalized
+
+
 st.sidebar.header("Ubikais Query")
+
+default_airlines = ["ESR"]
+airline_options = sorted({*default_airlines, *st.session_state.selected_airlines})
 
 date_col1, date_col2, date_col3 = st.sidebar.columns([1, 4, 1])
 with date_col1:
@@ -46,7 +60,6 @@ with date_col1:
 with date_col2:
     st.date_input(
         "Flight date",
-        value=st.session_state.base_date,
         key="base_date",
         label_visibility="collapsed",
     )
@@ -57,12 +70,27 @@ base_date = st.session_state.base_date
 if isinstance(base_date, datetime):
     base_date = base_date.date()
 
-airline = st.sidebar.text_input("Airline", value="ESR").strip().upper()
+selected_airlines = st.sidebar.multiselect(
+    "Airlines",
+    options=airline_options,
+    accept_new_options=True,
+    key="selected_airlines",
+    on_change=_normalize_airlines,
+    help="Choose one or more airline codes. You can also type a new code and press Enter.",
+)
+selected_airlines = st.session_state.selected_airlines
 departure_airport = st.sidebar.text_input("Departure airport", value="RKSI").strip().upper()
 arrival_airport = st.sidebar.text_input("Arrival airport", value="RKSI").strip().upper()
-refresh_data = st.sidebar.button("Refresh ubikais data")
+type_filter_slot = st.sidebar.empty()
+refresh_button_slot = st.sidebar.empty()
+refresh_data = refresh_button_slot.button("Refresh ubikais data")
 
 st.sidebar.markdown("---")
+st.sidebar.subheader("Labels on bars")
+show_flt = st.sidebar.checkbox("Show FLT", value=True)
+show_reg = st.sidebar.checkbox("Show REG", value=False)
+show_spot = st.sidebar.checkbox("Show SPOT", value=False)
+
 st.sidebar.header("Timeline Settings")
 service_start_hour = st.sidebar.number_input(
     "Service day starts at (hour)",
@@ -79,31 +107,51 @@ dep_after = st.sidebar.number_input("Departure window end (after ATD)", 0, 240, 
 arr_before = st.sidebar.number_input("Arrival window start (before ATA)", 0, 240, 20, 5)
 arr_after = st.sidebar.number_input("Arrival window end (after ATA)", 0, 240, 30, 5)
 
-st.sidebar.subheader("Labels on bars")
-show_flt = st.sidebar.checkbox("Show FLT", value=True)
-show_reg = st.sidebar.checkbox("Show REG", value=False)
-show_memo = st.sidebar.checkbox("Show MEMO", value=False)
-
 st.title(f"Flight Handling Schedule ({base_date.strftime('%Y-%m-%d')})")
 st.caption("Data source: UBIKAIS departure/arrival JSON endpoints")
 
+if not selected_airlines:
+    st.warning("Choose at least one airline code.")
+    st.stop()
+
 query = UbikaisQuery(
     flight_date=base_date,
-    airline=airline or "ESR",
+    airline=selected_airlines[0],
     departure_airport=departure_airport or "RKSI",
     arrival_airport=arrival_airport or "RKSI",
 )
 
 with st.spinner("Loading flight data from ubikais..."):
     try:
-        dep_payload = fetch_records("dep", query, refresh=refresh_data)
-        arr_payload = fetch_records("arr", query, refresh=refresh_data)
+        dep_payload = fetch_records_for_airlines("dep", query, selected_airlines, refresh=refresh_data)
+        arr_payload = fetch_records_for_airlines("arr", query, selected_airlines, refresh=refresh_data)
     except Exception as exc:
         st.error(f"Ubikais data load failed: {exc}")
         st.stop()
 
 dep_df = departures_from_ubikais(dep_payload["records"])
 arr_df = arrivals_from_ubikais(arr_payload["records"])
+
+available_types = sorted(
+    {
+        str(value).strip()
+        for value in pd.concat([dep_df.get("TYP", pd.Series(dtype=str)), arr_df.get("TYP", pd.Series(dtype=str))])
+        if pd.notna(value) and str(value).strip()
+    }
+)
+selected_types = type_filter_slot.multiselect(
+    "Aircraft type",
+    options=available_types,
+    default=available_types,
+    help="Choose which aircraft types to include in the chart.",
+)
+
+if selected_types:
+    dep_df = dep_df[dep_df["TYP"].astype(str).isin(selected_types)].reset_index(drop=True)
+    arr_df = arr_df[arr_df["TYP"].astype(str).isin(selected_types)].reset_index(drop=True)
+else:
+    dep_df = dep_df.iloc[0:0].copy()
+    arr_df = arr_df.iloc[0:0].copy()
 
 config = TimelineConfig(
     base_date=base_date,
@@ -115,7 +163,7 @@ config = TimelineConfig(
     arr_after=int(arr_after),
     show_flt=show_flt,
     show_reg=show_reg,
-    show_memo=show_memo,
+    show_spot=show_spot,
 )
 
 try:
@@ -124,46 +172,50 @@ except ValueError as exc:
     st.warning(str(exc))
     st.stop()
 
-status_col1, status_col2, status_col3 = st.columns(3)
-status_col1.metric("Departure records", summary["total_dep"])
-status_col2.metric("Arrival records", summary["total_arr"])
+content_main, content_spacer = st.columns([7, 2])
 
-fetched_at_values = [dep_payload.get("fetched_at"), arr_payload.get("fetched_at")]
-fetched_at_values = [value for value in fetched_at_values if value]
-if fetched_at_values:
-    fetched_at = datetime.fromtimestamp(max(fetched_at_values))
-    status_col3.metric("Last fetched", fetched_at.strftime("%Y-%m-%d %H:%M:%S"))
-else:
-    status_col3.metric("Last fetched", "-")
+with content_main:
+    status_col1, status_col2, status_col3 = st.columns(3)
+    status_col1.metric("Departure records", summary["total_dep"])
+    status_col2.metric("Arrival records", summary["total_arr"])
 
-chart_name = (
-    f"{base_date.strftime('%Y-%m-%d')}_{airline or 'ALL'}_D{summary['total_dep']}_A{summary['total_arr']}.png"
-)
-buffer = io.BytesIO()
-fig.savefig(buffer, format="png", dpi=200, bbox_inches="tight")
-buffer.seek(0)
+    fetched_at_values = [dep_payload.get("fetched_at"), arr_payload.get("fetched_at")]
+    fetched_at_values = [value for value in fetched_at_values if value]
+    if fetched_at_values:
+        fetched_at = datetime.fromtimestamp(max(fetched_at_values))
+        status_col3.metric("Last fetched", fetched_at.strftime("%Y-%m-%d %H:%M:%S"))
+    else:
+        status_col3.metric("Last fetched", "-")
 
-download_col, info_col = st.columns([1, 2])
-with download_col:
-    st.download_button(
-        label="Download chart as PNG",
-        data=buffer,
-        file_name=chart_name,
-        mime="image/png",
+    airline_tag = selected_airlines[0] if len(selected_airlines) == 1 else f"{selected_airlines[0]}_plus{len(selected_airlines) - 1}"
+    chart_name = (
+        f"{base_date.strftime('%Y-%m-%d')}_{airline_tag}_D{summary['total_dep']}_A{summary['total_arr']}.png"
     )
-with info_col:
-    st.write(
-        f"Query: airline `{query.airline}`, dep `{query.departure_airport}`, "
-        f"arr `{query.arrival_airport}`"
-    )
+    buffer = io.BytesIO()
+    fig.savefig(buffer, format="png", dpi=200, bbox_inches="tight")
+    buffer.seek(0)
 
-st.pyplot(fig, use_container_width=True)
+    download_col, info_col = st.columns([1, 2])
+    with download_col:
+        st.download_button(
+            label="Download chart as PNG",
+            data=buffer,
+            file_name=chart_name,
+            mime="image/png",
+        )
+    with info_col:
+        st.write(
+            f"Query: airlines `{', '.join(selected_airlines)}`, dep `{query.departure_airport}`, "
+            f"arr `{query.arrival_airport}`, typ `{', '.join(selected_types) if selected_types else 'None'}`"
+        )
+
+    st.pyplot(fig, use_container_width=False)
 
 with st.expander("Raw data preview"):
     preview_col1, preview_col2 = st.columns(2)
     with preview_col1:
         st.subheader("Departures")
-        st.dataframe(pd.DataFrame(dep_payload["records"]))
+        st.dataframe(dep_df)
     with preview_col2:
         st.subheader("Arrivals")
-        st.dataframe(pd.DataFrame(arr_payload["records"]))
+        st.dataframe(arr_df)
