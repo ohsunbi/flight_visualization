@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import io
 from dataclasses import replace
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, timedelta, timezone
 
 import pandas as pd
 import streamlit as st
@@ -71,6 +71,8 @@ except ImportError:
 
 
 st.set_page_config(page_title="Flight Handling Schedule", layout="wide")
+
+KST = timezone(timedelta(hours=9))
 
 
 if "base_date" not in st.session_state:
@@ -237,8 +239,8 @@ with content_main:
     fetched_at_values = [dep_payload.get("fetched_at"), arr_payload.get("fetched_at")]
     fetched_at_values = [value for value in fetched_at_values if value]
     if fetched_at_values:
-        fetched_at = datetime.fromtimestamp(max(fetched_at_values))
-        status_col3.metric("Last fetched", fetched_at.strftime("%Y-%m-%d %H:%M:%S"))
+        fetched_at = datetime.fromtimestamp(max(fetched_at_values), tz=timezone.utc).astimezone(KST)
+        status_col3.metric("Last fetched", fetched_at.strftime("%Y-%m-%d %H:%M:%S KST"))
     else:
         status_col3.metric("Last fetched", "-")
 
