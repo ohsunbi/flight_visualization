@@ -17,6 +17,7 @@ ENDPOINTS: dict[Direction, str] = {
     "dep": "selectDep.fois",
     "arr": "selectArr.fois",
 }
+CACHE_TTL_SECONDS = 15 * 60
 
 
 @dataclass(frozen=True)
@@ -47,7 +48,9 @@ def fetch_records(
 ) -> dict[str, Any]:
     cache_path = _cache_path(cache_dir, direction, query)
     if cache_path.exists() and not refresh:
-        return json.loads(cache_path.read_text(encoding="utf-8"))
+        cached_payload = _load_cache_if_fresh(cache_path)
+        if cached_payload is not None:
+            return cached_payload
 
     records: list[dict[str, Any]] = []
     total: Optional[int] = None
@@ -189,6 +192,29 @@ def _cache_path(cache_dir: Union[str, Path], direction: Direction, query: Ubikai
         f"{query.date_compact}_{direction}_{safe_airline}_{safe_dep}_{safe_arr}_{safe_flight}.json"
     )
     return Path(cache_dir) / filename
+
+
+def _load_cache_if_fresh(cache_path: Path) -> Optional[dict[str, Any]]:
+    try:
+        payload = json.loads(cache_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+
+    fetched_at = payload.get("fetched_at")
+    if fetched_at is None:
+        try:
+            fetched_at = int(cache_path.stat().st_mtime)
+        except OSError:
+            return None
+
+    try:
+        age_seconds = time.time() - float(fetched_at)
+    except (TypeError, ValueError):
+        return None
+
+    if age_seconds <= CACHE_TTL_SECONDS:
+        return payload
+    return None
 
 
 def _serialize_query(query: UbikaisQuery) -> dict[str, Any]:

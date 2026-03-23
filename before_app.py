@@ -79,6 +79,8 @@ if "base_date" not in st.session_state:
     st.session_state.base_date = date.today()
 if "selected_airlines" not in st.session_state:
     st.session_state.selected_airlines = ["ESR"]
+if "aircraft_type_preferences" not in st.session_state:
+    st.session_state.aircraft_type_preferences = {}
 
 
 def _normalize_base_date() -> None:
@@ -104,6 +106,33 @@ def _normalize_airlines() -> None:
         if airline_code and airline_code not in normalized:
             normalized.append(airline_code)
     st.session_state.selected_airlines = normalized
+
+
+def _aircraft_type_widget_key(aircraft_type: str) -> str:
+    return f"aircraft_type_enabled::{aircraft_type}"
+
+
+def _aircraft_type_summary(selected_types: list[str], max_visible: int = 4) -> str:
+    if not selected_types:
+        return "Selected: none"
+
+    preview = ", ".join(selected_types[:max_visible])
+    if len(selected_types) > max_visible:
+        preview = f"{preview}, +{len(selected_types) - max_visible} more"
+    return f"Selected: {preview}"
+
+
+def _apply_aircraft_type_selection(aircraft_types: list[str]) -> None:
+    type_preferences = st.session_state.aircraft_type_preferences
+    for aircraft_type in aircraft_types:
+        state_key = _aircraft_type_widget_key(aircraft_type)
+        type_preferences[aircraft_type] = bool(st.session_state.get(state_key, True))
+    st.session_state.aircraft_type_preferences = type_preferences
+
+
+def _set_aircraft_type_draft(aircraft_types: list[str], enabled: bool) -> None:
+    for aircraft_type in aircraft_types:
+        st.session_state[_aircraft_type_widget_key(aircraft_type)] = enabled
 
 
 st.sidebar.header("Ubikais Query")
@@ -140,7 +169,7 @@ departure_airport = st.sidebar.text_input("Departure airport", value="RKSI").str
 arrival_airport = st.sidebar.text_input("Arrival airport", value="RKSI").strip().upper()
 type_filter_slot = st.sidebar.empty()
 refresh_button_slot = st.sidebar.empty()
-refresh_data = refresh_button_slot.button("Refresh ubikais data")
+refresh_data = refresh_button_slot.button("Refresh ubikais data", use_container_width=True)
 
 st.sidebar.markdown("---")
 st.sidebar.subheader("Labels on bars")
@@ -177,14 +206,24 @@ query = UbikaisQuery(
     departure_airport=departure_airport or "RKSI",
     arrival_airport=arrival_airport or "RKSI",
 )
+query_signature = (
+    query.flight_date.isoformat(),
+    tuple(sorted(selected_airlines)),
+    query.departure_airport,
+    query.arrival_airport,
+)
+previous_query_signature = st.session_state.get("_last_query_signature")
+should_refresh = refresh_data or previous_query_signature != query_signature
 
 with st.spinner("Loading flight data from ubikais..."):
     try:
-        dep_payload = fetch_records_for_airlines("dep", query, selected_airlines, refresh=refresh_data)
-        arr_payload = fetch_records_for_airlines("arr", query, selected_airlines, refresh=refresh_data)
+        dep_payload = fetch_records_for_airlines("dep", query, selected_airlines, refresh=should_refresh)
+        arr_payload = fetch_records_for_airlines("arr", query, selected_airlines, refresh=should_refresh)
     except Exception as exc:
         st.error(f"Ubikais data load failed: {exc}")
         st.stop()
+
+st.session_state["_last_query_signature"] = query_signature
 
 dep_df = departures_from_ubikais(dep_payload["records"])
 arr_df = arrivals_from_ubikais(arr_payload["records"])
@@ -196,12 +235,68 @@ available_types = sorted(
         if pd.notna(value) and str(value).strip()
     }
 )
-selected_types = type_filter_slot.multiselect(
-    "Aircraft type",
-    options=available_types,
-    default=available_types,
-    help="Choose which aircraft types to include in the chart.",
-)
+
+with type_filter_slot.container():
+    st.subheader("Aircraft type")
+    type_preferences = st.session_state.aircraft_type_preferences
+
+    selected_types = []
+    if available_types:
+        for aircraft_type in available_types:
+            if aircraft_type not in type_preferences:
+                type_preferences[aircraft_type] = True
+
+            draft_key = _aircraft_type_widget_key(aircraft_type)
+            if draft_key not in st.session_state:
+                st.session_state[draft_key] = type_preferences[aircraft_type]
+
+        with st.popover("Filter types", use_container_width=True, width="stretch"):
+            with st.form("aircraft_type_form", border=False, enter_to_submit=False):
+                st.caption("Changes are applied only when you click Apply.")
+
+                split_index = (len(available_types) + 1) // 2
+                left_types = available_types[:split_index]
+                right_types = available_types[split_index:]
+                type_col1, type_col2 = st.columns(2, gap="medium")
+
+                for col, column_types in ((type_col1, left_types), (type_col2, right_types)):
+                    with col:
+                        for aircraft_type in column_types:
+                            state_key = _aircraft_type_widget_key(aircraft_type)
+                            st.checkbox(aircraft_type, key=state_key)
+
+                action_col1, action_col2 = st.columns(2, gap="small")
+                with action_col1:
+                    st.form_submit_button(
+                        "Select all",
+                        key="aircraft_type_select_all",
+                        on_click=_set_aircraft_type_draft,
+                        args=(available_types, True),
+                        use_container_width=True,
+                    )
+                with action_col2:
+                    st.form_submit_button(
+                        "Clear",
+                        key="aircraft_type_clear_all",
+                        on_click=_set_aircraft_type_draft,
+                        args=(available_types, False),
+                        use_container_width=True,
+                    )
+
+                st.form_submit_button(
+                    "Apply",
+                    key="aircraft_type_apply",
+                    on_click=_apply_aircraft_type_selection,
+                    args=(available_types,),
+                    type="primary",
+                    use_container_width=True,
+                )
+
+        selected_types = [aircraft_type for aircraft_type in available_types if type_preferences.get(aircraft_type, True)]
+        st.caption(f"{len(selected_types)} of {len(available_types)} selected")
+        st.caption(_aircraft_type_summary(selected_types))
+    else:
+        st.caption("No aircraft types found for this query.")
 
 if selected_types:
     dep_df = dep_df[dep_df["TYP"].astype(str).isin(selected_types)].reset_index(drop=True)
