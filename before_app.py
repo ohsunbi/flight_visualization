@@ -3,6 +3,7 @@ from __future__ import annotations
 import io
 from dataclasses import replace
 from datetime import date, datetime, timedelta, timezone
+from typing import Optional
 
 import pandas as pd
 import streamlit as st
@@ -73,12 +74,36 @@ except ImportError:
 st.set_page_config(page_title="Flight Handling Schedule", layout="wide")
 
 KST = timezone(timedelta(hours=9))
+AIRLINE_OPTIONS = [
+    ("ESR", "이스타항공"),
+    ("TWB", "티웨이항공"),
+    ("APJ", "피치항공"),
+    ("PTA", "파라타항공"),
+    ("MMA", "미얀마국제항공"),
+    ("KZR", "에어아스타"),
+    ("CRK", "홍콩항공"),
+]
+AIRLINE_LABELS = {code: f"{code} {name}" for code, name in AIRLINE_OPTIONS}
+DEFAULT_AIRLINE_CODES = [code for code, _ in AIRLINE_OPTIONS]
+
+st.markdown(
+    """
+    <style>
+    div.st-key-custom_airline_input {
+        margin-bottom: -0.35rem;
+    }
+    </style>
+    """,
+    unsafe_allow_html=True,
+)
 
 
 if "base_date" not in st.session_state:
     st.session_state.base_date = date.today()
-if "selected_airlines" not in st.session_state:
-    st.session_state.selected_airlines = ["ESR"]
+if "airline_preferences" not in st.session_state:
+    st.session_state.airline_preferences = {code: code == "ESR" for code, _ in AIRLINE_OPTIONS}
+if "custom_airline_codes" not in st.session_state:
+    st.session_state.custom_airline_codes = []
 if "aircraft_type_preferences" not in st.session_state:
     st.session_state.aircraft_type_preferences = {}
 
@@ -99,13 +124,59 @@ def _next_day() -> None:
     st.session_state.base_date = st.session_state.base_date + timedelta(days=1)
 
 
-def _normalize_airlines() -> None:
-    normalized = []
-    for airline in st.session_state.get("selected_airlines", []):
-        airline_code = str(airline).strip().upper()
-        if airline_code and airline_code not in normalized:
-            normalized.append(airline_code)
-    st.session_state.selected_airlines = normalized
+def _airline_widget_key(airline_code: str) -> str:
+    return f"airline_enabled::{airline_code}"
+
+
+def _normalize_airline_code(value: str) -> str:
+    return "".join(ch for ch in str(value).strip().upper() if ch.isalnum())
+
+
+def _get_airline_options() -> list[tuple[str, str]]:
+    options = list(AIRLINE_OPTIONS)
+    for airline_code in st.session_state.custom_airline_codes:
+        if airline_code not in DEFAULT_AIRLINE_CODES:
+            options.append((airline_code, ""))
+    return options
+
+
+def _airline_summary(selected_codes: list[str], max_visible: int = 3) -> str:
+    if not selected_codes:
+        return "none"
+
+    preview = ", ".join(selected_codes[:max_visible])
+    if len(selected_codes) > max_visible:
+        preview = f"{preview}, +{len(selected_codes) - max_visible} more"
+    return preview
+
+
+def _apply_airline_selection(airline_codes: list[str]) -> None:
+    airline_preferences = st.session_state.airline_preferences
+    for airline_code in airline_codes:
+        state_key = _airline_widget_key(airline_code)
+        airline_preferences[airline_code] = bool(st.session_state.get(state_key, False))
+    st.session_state.airline_preferences = airline_preferences
+
+
+def _set_airline_draft(airline_codes: list[str], enabled: bool) -> None:
+    for airline_code in airline_codes:
+        st.session_state[_airline_widget_key(airline_code)] = enabled
+
+
+def _add_custom_airline() -> None:
+    airline_code = _normalize_airline_code(st.session_state.get("custom_airline_input", ""))
+    st.session_state.custom_airline_input = ""
+    if not airline_code:
+        return
+
+    custom_airline_codes = list(st.session_state.custom_airline_codes)
+    if airline_code not in DEFAULT_AIRLINE_CODES and airline_code not in custom_airline_codes:
+        custom_airline_codes.append(airline_code)
+        st.session_state.custom_airline_codes = custom_airline_codes
+
+    if airline_code not in st.session_state.airline_preferences:
+        st.session_state.airline_preferences[airline_code] = False
+    st.session_state[_airline_widget_key(airline_code)] = True
 
 
 def _aircraft_type_widget_key(aircraft_type: str) -> str:
@@ -114,12 +185,12 @@ def _aircraft_type_widget_key(aircraft_type: str) -> str:
 
 def _aircraft_type_summary(selected_types: list[str], max_visible: int = 4) -> str:
     if not selected_types:
-        return "Selected: none"
+        return "none"
 
     preview = ", ".join(selected_types[:max_visible])
     if len(selected_types) > max_visible:
         preview = f"{preview}, +{len(selected_types) - max_visible} more"
-    return f"Selected: {preview}"
+    return preview
 
 
 def _apply_aircraft_type_selection(aircraft_types: list[str]) -> None:
@@ -135,10 +206,101 @@ def _set_aircraft_type_draft(aircraft_types: list[str], enabled: bool) -> None:
         st.session_state[_aircraft_type_widget_key(aircraft_type)] = enabled
 
 
-st.sidebar.header("Ubikais Query")
+def _normalize_hhmm(value) -> Optional[str]:
+    if pd.isna(value):
+        return None
 
-default_airlines = ["ESR"]
-airline_options = sorted({*default_airlines, *st.session_state.selected_airlines})
+    digits = "".join(ch for ch in str(value).strip() if ch.isdigit())
+    if len(digits) == 3:
+        digits = f"0{digits}"
+    if len(digits) != 4:
+        return None
+
+    try:
+        hour = int(digits[:2])
+        minute = int(digits[2:])
+    except ValueError:
+        return None
+
+    if not (0 <= hour <= 23 and 0 <= minute <= 59):
+        return None
+    return digits
+
+
+def _pick_service_day_time(record: dict, direction: str) -> Optional[str]:
+    keys = ("atd", "etd", "schTime") if direction == "dep" else ("ata", "eta", "sta")
+    for key in keys:
+        hhmm = _normalize_hhmm(record.get(key))
+        if hhmm is not None:
+            return hhmm
+    return None
+
+
+def _filter_service_day_records(
+    records: list[dict],
+    *,
+    direction: str,
+    service_start_hour: int,
+    include_early_window: bool,
+) -> list[dict]:
+    service_start_minutes = int(service_start_hour) * 60
+    filtered_records = []
+
+    for record in records:
+        hhmm = _pick_service_day_time(record, direction)
+        if hhmm is None:
+            continue
+
+        minutes = int(hhmm[:2]) * 60 + int(hhmm[2:])
+        is_early_window = minutes < service_start_minutes
+
+        if include_early_window == is_early_window:
+            filtered_records.append(record)
+
+    return filtered_records
+
+
+def _merge_service_day_payload(
+    *,
+    direction: str,
+    base_payload: dict,
+    next_payload: Optional[dict],
+    service_start_hour: int,
+) -> dict:
+    base_records = _filter_service_day_records(
+        base_payload.get("records") or [],
+        direction=direction,
+        service_start_hour=service_start_hour,
+        include_early_window=False,
+    )
+
+    next_records: list[dict] = []
+    if next_payload is not None and service_start_hour > 0:
+        next_records = _filter_service_day_records(
+            next_payload.get("records") or [],
+            direction=direction,
+            service_start_hour=service_start_hour,
+            include_early_window=True,
+        )
+
+    fetched_at_candidates = [base_payload.get("fetched_at")]
+    if next_payload is not None:
+        fetched_at_candidates.append(next_payload.get("fetched_at"))
+    fetched_at_values = [int(value) for value in fetched_at_candidates if value]
+
+    return {
+        "status": "success",
+        "direction": direction,
+        "query": {
+            **(base_payload.get("query") or {}),
+            "service_day_start_hour": service_start_hour,
+            "service_day_date": (base_payload.get("query") or {}).get("flight_date"),
+        },
+        "fetched_at": max(fetched_at_values) if fetched_at_values else None,
+        "total": len(base_records) + len(next_records),
+        "records": [*base_records, *next_records],
+    }
+
 
 date_col1, date_col2, date_col3 = st.sidebar.columns([1, 4, 1])
 with date_col1:
@@ -156,20 +318,76 @@ base_date = st.session_state.base_date
 if isinstance(base_date, datetime):
     base_date = base_date.date()
 
-selected_airlines = st.sidebar.multiselect(
-    "Airlines",
-    options=airline_options,
-    accept_new_options=True,
-    key="selected_airlines",
-    on_change=_normalize_airlines,
-    help="Choose one or more airline codes. You can also type a new code and press Enter.",
+st.sidebar.subheader("Airlines")
+airline_preferences = st.session_state.airline_preferences
+airline_options = _get_airline_options()
+airline_codes = [code for code, _ in airline_options]
+for airline_code in airline_codes:
+    if airline_code not in airline_preferences:
+        airline_preferences[airline_code] = False
+
+    draft_key = _airline_widget_key(airline_code)
+    if draft_key not in st.session_state:
+        st.session_state[draft_key] = airline_preferences[airline_code]
+
+with st.sidebar.popover("Filter airlines", use_container_width=True, width="stretch"):
+    st.caption("Add airline code")
+    with st.form("airline_add_form", border=False, enter_to_submit=False):
+        add_airline_col1, add_airline_col2 = st.columns([3, 1], gap="small")
+        with add_airline_col1:
+            st.text_input("Add airline code", key="custom_airline_input", label_visibility="collapsed")
+        with add_airline_col2:
+            st.form_submit_button("Add", on_click=_add_custom_airline, use_container_width=True)
+
+    st.divider()
+
+    with st.form("airline_filter_form", border=False, enter_to_submit=False):
+        st.caption("Changes are applied only when you click Apply.")
+
+        for airline_code, airline_name in airline_options:
+            label = f"{airline_code} {airline_name}".strip()
+            st.checkbox(label, key=_airline_widget_key(airline_code))
+
+        airline_action_col1, airline_action_col2 = st.columns(2, gap="small")
+        with airline_action_col1:
+            st.form_submit_button(
+                "Select all",
+                key="airline_select_all",
+                on_click=_set_airline_draft,
+                args=(airline_codes, True),
+                use_container_width=True,
+            )
+        with airline_action_col2:
+            st.form_submit_button(
+                "Clear",
+                key="airline_clear_all",
+                on_click=_set_airline_draft,
+                args=(airline_codes, False),
+                use_container_width=True,
+            )
+
+        st.form_submit_button(
+            "Apply",
+            key="airline_apply",
+            on_click=_apply_airline_selection,
+            args=(airline_codes,),
+            type="primary",
+            use_container_width=True,
+        )
+
+selected_airlines = [airline_code for airline_code in airline_codes if airline_preferences.get(airline_code, False)]
+st.sidebar.caption(f"{len(selected_airlines)} of {len(airline_codes)} selected")
+st.sidebar.markdown(
+    f"Selected: <span style='color:#ff6b5a; font-weight:600;'>{_airline_summary(selected_airlines)}</span>",
+    unsafe_allow_html=True,
 )
-selected_airlines = st.session_state.selected_airlines
-departure_airport = st.sidebar.text_input("Departure airport", value="RKSI").strip().upper()
-arrival_airport = st.sidebar.text_input("Arrival airport", value="RKSI").strip().upper()
 type_filter_slot = st.sidebar.empty()
 refresh_button_slot = st.sidebar.empty()
-refresh_data = refresh_button_slot.button("Refresh ubikais data", use_container_width=True)
+refresh_data = refresh_button_slot.button(
+    "Refresh data",
+    key="refresh_data_button",
+    use_container_width=True,
+)
 
 st.sidebar.markdown("---")
 st.sidebar.subheader("Labels on bars")
@@ -192,6 +410,10 @@ dep_before = st.sidebar.number_input("Departure window start (before ATD)", 0, 2
 dep_after = st.sidebar.number_input("Departure window end (after ATD)", 0, 240, 10, 5)
 arr_before = st.sidebar.number_input("Arrival window start (before ATA)", 0, 240, 20, 5)
 arr_after = st.sidebar.number_input("Arrival window end (after ATA)", 0, 240, 30, 5)
+
+st.sidebar.markdown("---")
+departure_airport = st.sidebar.text_input("Departure airport", value="RKSI").strip().upper()
+arrival_airport = st.sidebar.text_input("Arrival airport", value="RKSI").strip().upper()
 
 st.title(f"Flight Handling Schedule ({base_date.strftime('%Y-%m-%d')})")
 st.caption("Data source: UBIKAIS departure/arrival JSON endpoints")
@@ -217,8 +439,29 @@ should_refresh = refresh_data or previous_query_signature != query_signature
 
 with st.spinner("Loading flight data from ubikais..."):
     try:
-        dep_payload = fetch_records_for_airlines("dep", query, selected_airlines, refresh=should_refresh)
-        arr_payload = fetch_records_for_airlines("arr", query, selected_airlines, refresh=should_refresh)
+        next_day_query = replace(query, flight_date=base_date + timedelta(days=1))
+
+        dep_payload_base = fetch_records_for_airlines("dep", query, selected_airlines, refresh=should_refresh)
+        arr_payload_base = fetch_records_for_airlines("arr", query, selected_airlines, refresh=should_refresh)
+
+        dep_payload_next = None
+        arr_payload_next = None
+        if int(service_start_hour) > 0:
+            dep_payload_next = fetch_records_for_airlines("dep", next_day_query, selected_airlines, refresh=should_refresh)
+            arr_payload_next = fetch_records_for_airlines("arr", next_day_query, selected_airlines, refresh=should_refresh)
+
+        dep_payload = _merge_service_day_payload(
+            direction="dep",
+            base_payload=dep_payload_base,
+            next_payload=dep_payload_next,
+            service_start_hour=int(service_start_hour),
+        )
+        arr_payload = _merge_service_day_payload(
+            direction="arr",
+            base_payload=arr_payload_base,
+            next_payload=arr_payload_next,
+            service_start_hour=int(service_start_hour),
+        )
     except Exception as exc:
         st.error(f"Ubikais data load failed: {exc}")
         st.stop()
@@ -294,7 +537,10 @@ with type_filter_slot.container():
 
         selected_types = [aircraft_type for aircraft_type in available_types if type_preferences.get(aircraft_type, True)]
         st.caption(f"{len(selected_types)} of {len(available_types)} selected")
-        st.caption(_aircraft_type_summary(selected_types))
+        st.markdown(
+            f"Selected: <span style='color:#ff6b5a; font-weight:600;'>{_aircraft_type_summary(selected_types)}</span>",
+            unsafe_allow_html=True,
+        )
     else:
         st.caption("No aircraft types found for this query.")
 
@@ -362,6 +608,12 @@ with content_main:
         )
 
     st.pyplot(fig, use_container_width=False)
+    service_day_end = base_date + timedelta(days=1) if int(service_start_hour) > 0 else base_date
+    service_day_end_time = f"{int(service_start_hour):02d}:00" if int(service_start_hour) > 0 else "24:00"
+    st.caption(
+        f"Service day: {base_date.strftime('%Y-%m-%d')} {int(service_start_hour):02d}:00 "
+        f"to {service_day_end.strftime('%Y-%m-%d')} {service_day_end_time}"
+    )
 
 with st.expander("Raw data preview"):
     preview_col1, preview_col2 = st.columns(2)
