@@ -135,13 +135,6 @@ st.markdown(
         font-weight: 600;
         color: #f3f4f8;
     }
-    div.st-key-details_panel {
-        background: rgba(255, 255, 255, 0.03);
-        border: 1px solid rgba(255, 255, 255, 0.08);
-        border-radius: 14px;
-        padding: 0.9rem 1rem 0.3rem;
-        margin-top: 0.4rem;
-    }
     @media (max-width: 768px) {
         div.st-key-main_panel {
             max-width: 100%;
@@ -161,6 +154,8 @@ if "custom_airline_codes" not in st.session_state:
     st.session_state.custom_airline_codes = []
 if "aircraft_type_preferences" not in st.session_state:
     st.session_state.aircraft_type_preferences = {}
+if "_force_refresh" not in st.session_state:
+    st.session_state["_force_refresh"] = False
 
 
 def _normalize_base_date() -> None:
@@ -177,6 +172,10 @@ def _prev_day() -> None:
 def _next_day() -> None:
     _normalize_base_date()
     st.session_state.base_date = st.session_state.base_date + timedelta(days=1)
+
+
+def _request_refresh() -> None:
+    st.session_state["_force_refresh"] = True
 
 
 def _airline_widget_key(airline_code: str) -> str:
@@ -203,24 +202,6 @@ def _airline_summary(selected_codes: list[str], max_visible: int = 3) -> str:
     if len(selected_codes) > max_visible:
         preview = f"{preview}, +{len(selected_codes) - max_visible} more"
     return preview
-
-
-def _selection_count_html(selected_count: int, total_count: int) -> str:
-    if total_count <= 0:
-        return ""
-    return (
-        "<div style='"
-        "text-align:right;"
-        "padding-top:0.85rem;"
-        "font-size:0.875rem;"
-        "line-height:1.2;"
-        "white-space:nowrap;"
-        "color:var(--text-color);"
-        "opacity:0.65;"
-        "'>"
-        f"{selected_count} of {total_count} selected"
-        "</div>"
-    )
 
 
 def _apply_airline_selection(airline_codes: list[str]) -> None:
@@ -398,11 +379,7 @@ for airline_code in airline_codes:
         st.session_state[draft_key] = airline_preferences[airline_code]
 
 selected_airlines = [airline_code for airline_code in airline_codes if airline_preferences.get(airline_code, False)]
-airline_header_col1, airline_header_col2 = st.sidebar.columns([3, 2], gap="small")
-with airline_header_col1:
-    st.subheader("Airlines")
-with airline_header_col2:
-    st.markdown(_selection_count_html(len(selected_airlines), len(airline_codes)), unsafe_allow_html=True)
+st.sidebar.subheader("Airlines")
 
 with st.sidebar.popover("Filter airlines", width="stretch"):
     st.caption("Add airline code")
@@ -454,12 +431,6 @@ st.sidebar.markdown(
     unsafe_allow_html=True,
 )
 type_filter_slot = st.sidebar.empty()
-refresh_button_slot = st.sidebar.empty()
-refresh_data = refresh_button_slot.button(
-    "Refresh data",
-    key="refresh_data_button",
-    width="stretch",
-)
 
 st.sidebar.markdown("---")
 st.sidebar.subheader("Labels on bars")
@@ -506,7 +477,9 @@ query_signature = (
     query.arrival_airport,
 )
 previous_query_signature = st.session_state.get("_last_query_signature")
+refresh_data = bool(st.session_state.get("_force_refresh", False))
 should_refresh = refresh_data or previous_query_signature != query_signature
+st.session_state["_force_refresh"] = False
 
 with st.spinner("Loading flight data from ubikais..."):
     try:
@@ -565,11 +538,7 @@ with type_filter_slot.container():
 
         selected_types = [aircraft_type for aircraft_type in available_types if type_preferences.get(aircraft_type, True)]
 
-    type_header_col1, type_header_col2 = st.columns([3, 2], gap="small")
-    with type_header_col1:
-        st.subheader("Aircraft type")
-    with type_header_col2:
-        st.markdown(_selection_count_html(len(selected_types), len(available_types)), unsafe_allow_html=True)
+    st.subheader("Aircraft type")
 
     if available_types:
         with st.popover("Filter types", width="stretch"):
@@ -684,7 +653,7 @@ with content_main:
         buffer.seek(0)
 
         st.pyplot(fig, width="content")
-        last_fetched_col, download_col = st.columns([3, 1], gap="small")
+        last_fetched_col, action_col = st.columns([3, 2], gap="small")
         with last_fetched_col:
             st.markdown(
                 f"""
@@ -695,17 +664,21 @@ with content_main:
                 """,
                 unsafe_allow_html=True,
             )
-        with download_col:
-            st.download_button(
-                label="Download chart as PNG",
-                data=buffer,
-                file_name=chart_name,
-                mime="image/png",
-                width="stretch",
-            )
+        with action_col:
+            refresh_col, download_col = st.columns(2, gap="small")
+            with refresh_col:
+                st.button("Refresh", key="refresh_main_button", width="stretch", on_click=_request_refresh)
+            with download_col:
+                st.download_button(
+                    label="Download PNG",
+                    data=buffer,
+                    file_name=chart_name,
+                    mime="image/png",
+                    width="stretch",
+                )
         service_day_end = base_date + timedelta(days=1) if int(service_start_hour) > 0 else base_date
         service_day_end_time = f"{int(service_start_hour):02d}:00" if int(service_start_hour) > 0 else "24:00"
-        with st.container(key="details_panel"):
+        with st.expander("More details"):
             st.caption(
                 f"Service day: {base_date.strftime('%Y-%m-%d')} {int(service_start_hour):02d}:00 "
                 f"to {service_day_end.strftime('%Y-%m-%d')} {service_day_end_time}"
