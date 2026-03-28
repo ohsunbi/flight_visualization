@@ -92,6 +92,9 @@ st.markdown(
     div.st-key-custom_airline_input {
         margin-bottom: -0.35rem;
     }
+    div[data-testid="stMainBlockContainer"] {
+        padding-top: 2rem;
+    }
     div.st-key-main_panel {
         max-width: 1240px;
     }
@@ -137,6 +140,9 @@ st.markdown(
         color: #f3f4f8;
     }
     @media (max-width: 768px) {
+        div[data-testid="stMainBlockContainer"] {
+            padding-top: 1.25rem;
+        }
         div.st-key-main_panel {
             max-width: 100%;
         }
