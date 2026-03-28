@@ -92,28 +92,6 @@ st.markdown(
     div.st-key-custom_airline_input {
         margin-bottom: -0.35rem;
     }
-    div.st-key-date_nav div[data-testid="stHorizontalBlock"] {
-        flex-wrap: nowrap;
-        align-items: center;
-        gap: 0.35rem;
-    }
-    div.st-key-date_nav div[data-testid="column"] {
-        min-width: 0;
-    }
-    div.st-key-date_nav div[data-testid="column"]:first-child,
-    div.st-key-date_nav div[data-testid="column"]:last-child {
-        flex: 0 0 2.75rem;
-    }
-    div.st-key-date_nav div[data-testid="column"]:nth-child(2) {
-        flex: 1 1 auto;
-    }
-    div.st-key-date_nav input {
-        text-align: center;
-    }
-    div.st-key-date_nav button {
-        min-width: 2.75rem;
-        padding-inline: 0;
-    }
     </style>
     """,
     unsafe_allow_html=True,
@@ -170,6 +148,24 @@ def _airline_summary(selected_codes: list[str], max_visible: int = 3) -> str:
     if len(selected_codes) > max_visible:
         preview = f"{preview}, +{len(selected_codes) - max_visible} more"
     return preview
+
+
+def _selection_count_html(selected_count: int, total_count: int) -> str:
+    if total_count <= 0:
+        return ""
+    return (
+        "<div style='"
+        "text-align:right;"
+        "padding-top:0.85rem;"
+        "font-size:0.875rem;"
+        "line-height:1.2;"
+        "white-space:nowrap;"
+        "color:var(--text-color);"
+        "opacity:0.65;"
+        "'>"
+        f"{selected_count} of {total_count} selected"
+        "</div>"
+    )
 
 
 def _apply_airline_selection(airline_codes: list[str]) -> None:
@@ -324,24 +320,17 @@ def _merge_service_day_payload(
     }
 
 
-with st.sidebar.container(key="date_nav"):
-    date_col1, date_col2, date_col3 = st.columns([1, 5, 1], gap="small")
-    with date_col1:
-        st.button("<", key="btn_prev_day", on_click=_prev_day, use_container_width=True)
-    with date_col2:
-        st.date_input(
-            "Flight date",
-            key="base_date",
-            label_visibility="collapsed",
-        )
-    with date_col3:
-        st.button(">", key="btn_next_day", on_click=_next_day, use_container_width=True)
+st.sidebar.date_input("Date", key="base_date", label_visibility="collapsed")
+date_nav_col1, date_nav_col2 = st.sidebar.columns(2, gap="small")
+with date_nav_col1:
+    st.button("◀ Prev", key="btn_prev_day", on_click=_prev_day, width="stretch")
+with date_nav_col2:
+    st.button("Next ▶", key="btn_next_day", on_click=_next_day, width="stretch")
 
 base_date = st.session_state.base_date
 if isinstance(base_date, datetime):
     base_date = base_date.date()
 
-st.sidebar.subheader("Airlines")
 airline_preferences = st.session_state.airline_preferences
 airline_options = _get_airline_options()
 airline_codes = [code for code, _ in airline_options]
@@ -353,14 +342,21 @@ for airline_code in airline_codes:
     if draft_key not in st.session_state:
         st.session_state[draft_key] = airline_preferences[airline_code]
 
-with st.sidebar.popover("Filter airlines", use_container_width=True, width="stretch"):
+selected_airlines = [airline_code for airline_code in airline_codes if airline_preferences.get(airline_code, False)]
+airline_header_col1, airline_header_col2 = st.sidebar.columns([3, 2], gap="small")
+with airline_header_col1:
+    st.subheader("Airlines")
+with airline_header_col2:
+    st.markdown(_selection_count_html(len(selected_airlines), len(airline_codes)), unsafe_allow_html=True)
+
+with st.sidebar.popover("Filter airlines", width="stretch"):
     st.caption("Add airline code")
     with st.form("airline_add_form", border=False, enter_to_submit=False):
         add_airline_col1, add_airline_col2 = st.columns([3, 1], gap="small")
         with add_airline_col1:
             st.text_input("Add airline code", key="custom_airline_input", label_visibility="collapsed")
         with add_airline_col2:
-            st.form_submit_button("Add", on_click=_add_custom_airline, use_container_width=True)
+            st.form_submit_button("Add", on_click=_add_custom_airline, width="stretch")
 
     st.divider()
 
@@ -378,7 +374,7 @@ with st.sidebar.popover("Filter airlines", use_container_width=True, width="stre
                 key="airline_select_all",
                 on_click=_set_airline_draft,
                 args=(airline_codes, True),
-                use_container_width=True,
+                width="stretch",
             )
         with airline_action_col2:
             st.form_submit_button(
@@ -386,7 +382,7 @@ with st.sidebar.popover("Filter airlines", use_container_width=True, width="stre
                 key="airline_clear_all",
                 on_click=_set_airline_draft,
                 args=(airline_codes, False),
-                use_container_width=True,
+                width="stretch",
             )
 
         st.form_submit_button(
@@ -395,11 +391,9 @@ with st.sidebar.popover("Filter airlines", use_container_width=True, width="stre
             on_click=_apply_airline_selection,
             args=(airline_codes,),
             type="primary",
-            use_container_width=True,
+            width="stretch",
         )
 
-selected_airlines = [airline_code for airline_code in airline_codes if airline_preferences.get(airline_code, False)]
-st.sidebar.caption(f"{len(selected_airlines)} of {len(airline_codes)} selected")
 st.sidebar.markdown(
     f"Selected: <span style='color:#ff6b5a; font-weight:600;'>{_airline_summary(selected_airlines)}</span>",
     unsafe_allow_html=True,
@@ -409,7 +403,7 @@ refresh_button_slot = st.sidebar.empty()
 refresh_data = refresh_button_slot.button(
     "Refresh data",
     key="refresh_data_button",
-    use_container_width=True,
+    width="stretch",
 )
 
 st.sidebar.markdown("---")
@@ -438,8 +432,7 @@ st.sidebar.markdown("---")
 departure_airport = st.sidebar.text_input("Departure airport", value="RKSI").strip().upper()
 arrival_airport = st.sidebar.text_input("Arrival airport", value="RKSI").strip().upper()
 
-st.title(f"Flight Handling Schedule ({base_date.strftime('%Y-%m-%d')})")
-st.caption("Data source: UBIKAIS departure/arrival JSON endpoints")
+st.title(f"Flight Schedule ({base_date.strftime('%Y-%m-%d')})")
 
 if not selected_airlines:
     st.warning("Choose at least one airline code.")
@@ -503,7 +496,6 @@ available_types = sorted(
 )
 
 with type_filter_slot.container():
-    st.subheader("Aircraft type")
     type_preferences = st.session_state.aircraft_type_preferences
 
     selected_types = []
@@ -516,7 +508,16 @@ with type_filter_slot.container():
             if draft_key not in st.session_state:
                 st.session_state[draft_key] = type_preferences[aircraft_type]
 
-        with st.popover("Filter types", use_container_width=True, width="stretch"):
+        selected_types = [aircraft_type for aircraft_type in available_types if type_preferences.get(aircraft_type, True)]
+
+    type_header_col1, type_header_col2 = st.columns([3, 2], gap="small")
+    with type_header_col1:
+        st.subheader("Aircraft type")
+    with type_header_col2:
+        st.markdown(_selection_count_html(len(selected_types), len(available_types)), unsafe_allow_html=True)
+
+    if available_types:
+        with st.popover("Filter types", width="stretch"):
             with st.form("aircraft_type_form", border=False, enter_to_submit=False):
                 st.caption("Changes are applied only when you click Apply.")
 
@@ -538,7 +539,7 @@ with type_filter_slot.container():
                         key="aircraft_type_select_all",
                         on_click=_set_aircraft_type_draft,
                         args=(available_types, True),
-                        use_container_width=True,
+                        width="stretch",
                     )
                 with action_col2:
                     st.form_submit_button(
@@ -546,7 +547,7 @@ with type_filter_slot.container():
                         key="aircraft_type_clear_all",
                         on_click=_set_aircraft_type_draft,
                         args=(available_types, False),
-                        use_container_width=True,
+                        width="stretch",
                     )
 
                 st.form_submit_button(
@@ -555,11 +556,9 @@ with type_filter_slot.container():
                     on_click=_apply_aircraft_type_selection,
                     args=(available_types,),
                     type="primary",
-                    use_container_width=True,
+                    width="stretch",
                 )
 
-        selected_types = [aircraft_type for aircraft_type in available_types if type_preferences.get(aircraft_type, True)]
-        st.caption(f"{len(selected_types)} of {len(available_types)} selected")
         st.markdown(
             f"Selected: <span style='color:#ff6b5a; font-weight:600;'>{_aircraft_type_summary(selected_types)}</span>",
             unsafe_allow_html=True,
@@ -596,17 +595,17 @@ except ValueError as exc:
 content_main, content_spacer = st.columns([7, 2])
 
 with content_main:
-    status_col1, status_col2, status_col3 = st.columns(3)
-    status_col1.metric("Departure records", summary["total_dep"])
-    status_col2.metric("Arrival records", summary["total_arr"])
+    status_col1, status_col2 = st.columns(2)
+    status_col1.metric("Departure", summary["total_dep"])
+    status_col2.metric("Arrival", summary["total_arr"])
 
     fetched_at_values = [dep_payload.get("fetched_at"), arr_payload.get("fetched_at")]
     fetched_at_values = [value for value in fetched_at_values if value]
     if fetched_at_values:
         fetched_at = datetime.fromtimestamp(max(fetched_at_values), tz=timezone.utc).astimezone(KST)
-        status_col3.metric("Last fetched", fetched_at.strftime("%Y-%m-%d %H:%M:%S KST"))
+        fetched_at_text = fetched_at.strftime("%Y-%m-%d %H:%M:%S KST")
     else:
-        status_col3.metric("Last fetched", "-")
+        fetched_at_text = "-"
 
     airline_tag = selected_airlines[0] if len(selected_airlines) == 1 else f"{selected_airlines[0]}_plus{len(selected_airlines) - 1}"
     chart_name = (
@@ -616,26 +615,24 @@ with content_main:
     fig.savefig(buffer, format="png", dpi=200, bbox_inches="tight")
     buffer.seek(0)
 
-    download_col, info_col = st.columns([1, 2])
-    with download_col:
-        st.download_button(
-            label="Download chart as PNG",
-            data=buffer,
-            file_name=chart_name,
-            mime="image/png",
-        )
-    with info_col:
-        st.write(
-            f"Query: airlines `{', '.join(selected_airlines)}`, dep `{query.departure_airport}`, "
-            f"arr `{query.arrival_airport}`, typ `{', '.join(selected_types) if selected_types else 'None'}`"
-        )
-
-    st.pyplot(fig, use_container_width=False)
+    st.pyplot(fig, width="content")
     service_day_end = base_date + timedelta(days=1) if int(service_start_hour) > 0 else base_date
     service_day_end_time = f"{int(service_start_hour):02d}:00" if int(service_start_hour) > 0 else "24:00"
+    st.download_button(
+        label="Download chart as PNG",
+        data=buffer,
+        file_name=chart_name,
+        mime="image/png",
+    )
     st.caption(
         f"Service day: {base_date.strftime('%Y-%m-%d')} {int(service_start_hour):02d}:00 "
         f"to {service_day_end.strftime('%Y-%m-%d')} {service_day_end_time}"
+    )
+    st.caption(f"Data source: UBIKAIS departure/arrival JSON endpoints")
+    st.caption(f"Last fetched: {fetched_at_text}")
+    st.caption(
+        f"Query: airlines {', '.join(selected_airlines)}, dep {query.departure_airport}, "
+        f"arr {query.arrival_airport}, typ {', '.join(selected_types) if selected_types else 'None'}"
     )
 
 with st.expander("Raw data preview"):
