@@ -120,7 +120,8 @@ st.markdown(
         color: #f3f4f8;
     }
     .last-fetched-block {
-        margin-top: 0.5rem;
+        margin-top: 0.35rem;
+        margin-bottom: 0.55rem;
     }
     .last-fetched-label {
         font-size: 0.8rem;
@@ -138,6 +139,17 @@ st.markdown(
     @media (max-width: 768px) {
         div.st-key-main_panel {
             max-width: 100%;
+        }
+        .summary-card {
+            flex: 1 1 calc(50% - 0.375rem);
+            min-width: 0;
+            padding: 0.8rem 0.85rem 0.75rem;
+        }
+        .summary-card-value {
+            font-size: 1.75rem;
+        }
+        div.st-key-button_row div[data-testid="stHorizontalBlock"] {
+            row-gap: 0.65rem;
         }
     }
     </style>
@@ -653,18 +665,16 @@ with content_main:
         buffer.seek(0)
 
         st.pyplot(fig, width="content")
-        last_fetched_col, action_col = st.columns([3, 2], gap="small")
-        with last_fetched_col:
-            st.markdown(
-                f"""
-                <div class="last-fetched-block">
-                    <span class="last-fetched-label">Last fetched</span>
-                    <span class="last-fetched-value">{fetched_at_text}</span>
-                </div>
-                """,
-                unsafe_allow_html=True,
-            )
-        with action_col:
+        st.markdown(
+            f"""
+            <div class="last-fetched-block">
+                <span class="last-fetched-label">Last fetched</span>
+                <span class="last-fetched-value">{fetched_at_text}</span>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+        with st.container(key="button_row"):
             refresh_col, download_col = st.columns(2, gap="small")
             with refresh_col:
                 st.button("Refresh", key="refresh_main_button", width="stretch", on_click=_request_refresh)
