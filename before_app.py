@@ -80,7 +80,7 @@ AIRLINE_OPTIONS = [
     ("APJ", "피치항공"),
     ("PTA", "파라타항공"),
     ("MMA", "미얀마국제항공"),
-    ("KZR", "에어아스타"),
+    ("KZR", "에어아스타나"),
     ("CRK", "홍콩항공"),
 ]
 AIRLINE_LABELS = {code: f"{code} {name}" for code, name in AIRLINE_OPTIONS}
@@ -91,6 +91,61 @@ st.markdown(
     <style>
     div.st-key-custom_airline_input {
         margin-bottom: -0.35rem;
+    }
+    div.st-key-main_panel {
+        max-width: 1240px;
+    }
+    .summary-cards {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 0.75rem;
+        margin-bottom: 1rem;
+    }
+    .summary-card {
+        flex: 1 1 280px;
+        background: rgba(255, 255, 255, 0.04);
+        border: 1px solid rgba(255, 255, 255, 0.08);
+        border-radius: 14px;
+        padding: 0.9rem 1rem 0.85rem;
+    }
+    .summary-card-label {
+        font-size: 0.9rem;
+        color: rgba(250, 250, 250, 0.72);
+        margin-bottom: 0.35rem;
+    }
+    .summary-card-value {
+        font-size: 2rem;
+        line-height: 1;
+        font-weight: 700;
+        color: #f3f4f8;
+    }
+    .last-fetched-block {
+        margin-top: 0.5rem;
+    }
+    .last-fetched-label {
+        font-size: 0.8rem;
+        font-weight: 600;
+        letter-spacing: 0.02em;
+        text-transform: uppercase;
+        color: rgba(250, 250, 250, 0.62);
+        margin-right: 0.4rem;
+    }
+    .last-fetched-value {
+        font-size: 1rem;
+        font-weight: 600;
+        color: #f3f4f8;
+    }
+    div.st-key-details_panel {
+        background: rgba(255, 255, 255, 0.03);
+        border: 1px solid rgba(255, 255, 255, 0.08);
+        border-radius: 14px;
+        padding: 0.9rem 1rem 0.3rem;
+        margin-top: 0.4rem;
+    }
+    @media (max-width: 768px) {
+        div.st-key-main_panel {
+            max-width: 100%;
+        }
     }
     </style>
     """,
@@ -595,51 +650,76 @@ except ValueError as exc:
 content_main, content_spacer = st.columns([7, 2])
 
 with content_main:
-    status_col1, status_col2 = st.columns(2)
-    status_col1.metric("Departure", summary["total_dep"])
-    status_col2.metric("Arrival", summary["total_arr"])
+    with st.container(key="main_panel"):
+        st.markdown(
+            f"""
+            <div class="summary-cards">
+                <div class="summary-card">
+                    <div class="summary-card-label">Departure</div>
+                    <div class="summary-card-value">{summary["total_dep"]}</div>
+                </div>
+                <div class="summary-card">
+                    <div class="summary-card-label">Arrival</div>
+                    <div class="summary-card-value">{summary["total_arr"]}</div>
+                </div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
 
-    fetched_at_values = [dep_payload.get("fetched_at"), arr_payload.get("fetched_at")]
-    fetched_at_values = [value for value in fetched_at_values if value]
-    if fetched_at_values:
-        fetched_at = datetime.fromtimestamp(max(fetched_at_values), tz=timezone.utc).astimezone(KST)
-        fetched_at_text = fetched_at.strftime("%Y-%m-%d %H:%M:%S KST")
-    else:
-        fetched_at_text = "-"
+        fetched_at_values = [dep_payload.get("fetched_at"), arr_payload.get("fetched_at")]
+        fetched_at_values = [value for value in fetched_at_values if value]
+        if fetched_at_values:
+            fetched_at = datetime.fromtimestamp(max(fetched_at_values), tz=timezone.utc).astimezone(KST)
+            fetched_at_text = fetched_at.strftime("%Y-%m-%d %H:%M:%S KST")
+        else:
+            fetched_at_text = "-"
 
-    airline_tag = selected_airlines[0] if len(selected_airlines) == 1 else f"{selected_airlines[0]}_plus{len(selected_airlines) - 1}"
-    chart_name = (
-        f"{base_date.strftime('%Y-%m-%d')}_{airline_tag}_D{summary['total_dep']}_A{summary['total_arr']}.png"
-    )
-    buffer = io.BytesIO()
-    fig.savefig(buffer, format="png", dpi=200, bbox_inches="tight")
-    buffer.seek(0)
+        airline_tag = selected_airlines[0] if len(selected_airlines) == 1 else f"{selected_airlines[0]}_plus{len(selected_airlines) - 1}"
+        chart_name = (
+            f"{base_date.strftime('%Y-%m-%d')}_{airline_tag}_D{summary['total_dep']}_A{summary['total_arr']}.png"
+        )
+        buffer = io.BytesIO()
+        fig.savefig(buffer, format="png", dpi=200, bbox_inches="tight")
+        buffer.seek(0)
 
-    st.pyplot(fig, width="content")
-    service_day_end = base_date + timedelta(days=1) if int(service_start_hour) > 0 else base_date
-    service_day_end_time = f"{int(service_start_hour):02d}:00" if int(service_start_hour) > 0 else "24:00"
-    st.download_button(
-        label="Download chart as PNG",
-        data=buffer,
-        file_name=chart_name,
-        mime="image/png",
-    )
-    st.caption(
-        f"Service day: {base_date.strftime('%Y-%m-%d')} {int(service_start_hour):02d}:00 "
-        f"to {service_day_end.strftime('%Y-%m-%d')} {service_day_end_time}"
-    )
-    st.caption(f"Data source: UBIKAIS departure/arrival JSON endpoints")
-    st.caption(f"Last fetched: {fetched_at_text}")
-    st.caption(
-        f"Query: airlines {', '.join(selected_airlines)}, dep {query.departure_airport}, "
-        f"arr {query.arrival_airport}, typ {', '.join(selected_types) if selected_types else 'None'}"
-    )
-
-with st.expander("Raw data preview"):
-    preview_col1, preview_col2 = st.columns(2)
-    with preview_col1:
-        st.subheader("Departures")
-        st.dataframe(dep_df)
-    with preview_col2:
-        st.subheader("Arrivals")
-        st.dataframe(arr_df)
+        st.pyplot(fig, width="content")
+        last_fetched_col, download_col = st.columns([3, 1], gap="small")
+        with last_fetched_col:
+            st.markdown(
+                f"""
+                <div class="last-fetched-block">
+                    <span class="last-fetched-label">Last fetched</span>
+                    <span class="last-fetched-value">{fetched_at_text}</span>
+                </div>
+                """,
+                unsafe_allow_html=True,
+            )
+        with download_col:
+            st.download_button(
+                label="Download chart as PNG",
+                data=buffer,
+                file_name=chart_name,
+                mime="image/png",
+                width="stretch",
+            )
+        service_day_end = base_date + timedelta(days=1) if int(service_start_hour) > 0 else base_date
+        service_day_end_time = f"{int(service_start_hour):02d}:00" if int(service_start_hour) > 0 else "24:00"
+        with st.container(key="details_panel"):
+            st.caption(
+                f"Service day: {base_date.strftime('%Y-%m-%d')} {int(service_start_hour):02d}:00 "
+                f"to {service_day_end.strftime('%Y-%m-%d')} {service_day_end_time}"
+            )
+            st.caption("Data source: UBIKAIS departure/arrival JSON endpoints")
+            st.caption(
+                f"Query: airlines {', '.join(selected_airlines)}, dep {query.departure_airport}, "
+                f"arr {query.arrival_airport}, typ {', '.join(selected_types) if selected_types else 'None'}"
+            )
+        with st.expander("Raw data preview"):
+            preview_col1, preview_col2 = st.columns(2)
+            with preview_col1:
+                st.subheader("Departures")
+                st.dataframe(dep_df)
+            with preview_col2:
+                st.subheader("Arrivals")
+                st.dataframe(arr_df)
