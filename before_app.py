@@ -92,6 +92,28 @@ st.markdown(
     div.st-key-custom_airline_input {
         margin-bottom: -0.35rem;
     }
+    div.st-key-date_nav div[data-testid="stHorizontalBlock"] {
+        flex-wrap: nowrap;
+        align-items: center;
+        gap: 0.35rem;
+    }
+    div.st-key-date_nav div[data-testid="column"] {
+        min-width: 0;
+    }
+    div.st-key-date_nav div[data-testid="column"]:first-child,
+    div.st-key-date_nav div[data-testid="column"]:last-child {
+        flex: 0 0 2.75rem;
+    }
+    div.st-key-date_nav div[data-testid="column"]:nth-child(2) {
+        flex: 1 1 auto;
+    }
+    div.st-key-date_nav input {
+        text-align: center;
+    }
+    div.st-key-date_nav button {
+        min-width: 2.75rem;
+        padding-inline: 0;
+    }
     </style>
     """,
     unsafe_allow_html=True,
@@ -302,17 +324,18 @@ def _merge_service_day_payload(
     }
 
 
-date_col1, date_col2, date_col3 = st.sidebar.columns([1, 4, 1])
-with date_col1:
-    st.button("<", key="btn_prev_day", on_click=_prev_day)
-with date_col2:
-    st.date_input(
-        "Flight date",
-        key="base_date",
-        label_visibility="collapsed",
-    )
-with date_col3:
-    st.button(">", key="btn_next_day", on_click=_next_day)
+with st.sidebar.container(key="date_nav"):
+    date_col1, date_col2, date_col3 = st.columns([1, 5, 1], gap="small")
+    with date_col1:
+        st.button("<", key="btn_prev_day", on_click=_prev_day, use_container_width=True)
+    with date_col2:
+        st.date_input(
+            "Flight date",
+            key="base_date",
+            label_visibility="collapsed",
+        )
+    with date_col3:
+        st.button(">", key="btn_next_day", on_click=_next_day, use_container_width=True)
 
 base_date = st.session_state.base_date
 if isinstance(base_date, datetime):
@@ -400,7 +423,7 @@ service_start_hour = st.sidebar.number_input(
     "Service day starts at (hour)",
     min_value=0,
     max_value=23,
-    value=2,
+    value=0,
     step=1,
 )
 interval_min = st.sidebar.selectbox("Overlap interval (min)", options=[10, 20, 30], index=2)
