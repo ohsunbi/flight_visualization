@@ -508,15 +508,8 @@ query = UbikaisQuery(
     departure_airport=departure_airport or "RKSI",
     arrival_airport=arrival_airport or "RKSI",
 )
-query_signature = (
-    query.flight_date.isoformat(),
-    tuple(sorted(selected_airlines)),
-    query.departure_airport,
-    query.arrival_airport,
-)
-previous_query_signature = st.session_state.get("_last_query_signature")
 refresh_data = bool(st.session_state.get("_force_refresh", False))
-should_refresh = refresh_data or previous_query_signature != query_signature
+should_refresh = refresh_data
 st.session_state["_force_refresh"] = False
 
 with st.spinner("Loading flight data from ubikais..."):
@@ -547,8 +540,6 @@ with st.spinner("Loading flight data from ubikais..."):
     except Exception as exc:
         st.error(f"Ubikais data load failed: {exc}")
         st.stop()
-
-st.session_state["_last_query_signature"] = query_signature
 
 dep_df = departures_from_ubikais(dep_payload["records"])
 arr_df = arrivals_from_ubikais(arr_payload["records"])
