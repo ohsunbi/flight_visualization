@@ -142,6 +142,9 @@ st.markdown(
     div.st-key-mobile_date_nav {
         display: none;
     }
+    div.st-key-mobile_action_set {
+        display: none;
+    }
     @media (max-width: 768px) {
         div[data-testid="stMainBlockContainer"] {
             padding-top: 1.25rem;
@@ -160,8 +163,16 @@ st.markdown(
         div.st-key-mobile_date_nav {
             display: block;
         }
+        div.st-key-mobile_action_set {
+            display: block;
+        }
+        div.st-key-mobile_action_set button {
+            min-height: 2.6rem;
+            padding: 0.35rem 0.45rem;
+            font-size: 0.95rem;
+        }
         div.st-key-button_row div[data-testid="stHorizontalBlock"] {
-            row-gap: 0.65rem;
+            display: none;
         }
     }
     </style>
@@ -686,12 +697,6 @@ with content_main:
             """,
             unsafe_allow_html=True,
         )
-        with st.container(key="mobile_date_nav"):
-            mobile_prev_col, mobile_next_col = st.columns(2, gap="small")
-            with mobile_prev_col:
-                st.button("◀ Prev", key="btn_prev_day_mobile", on_click=_prev_day, width="stretch")
-            with mobile_next_col:
-                st.button("Next ▶", key="btn_next_day_mobile", on_click=_next_day, width="stretch")
         with st.container(key="button_row"):
             refresh_col, download_col = st.columns(2, gap="small")
             with refresh_col:
@@ -704,6 +709,18 @@ with content_main:
                     mime="image/png",
                     width="stretch",
                 )
+        with st.container(key="mobile_action_set"):
+            st.button("Next day", key="btn_next_day_mobile", on_click=_next_day, width="stretch")
+            st.button("Previous day", key="btn_prev_day_mobile", on_click=_prev_day, width="stretch")
+            st.button("Refresh", key="refresh_main_button_mobile", width="stretch", on_click=_request_refresh)
+            st.download_button(
+                label="Download PNG",
+                data=buffer,
+                file_name=chart_name,
+                mime="image/png",
+                key="download_png_mobile",
+                width="stretch",
+            )
         service_day_end = base_date + timedelta(days=1) if int(service_start_hour) > 0 else base_date
         service_day_end_time = f"{int(service_start_hour):02d}:00" if int(service_start_hour) > 0 else "24:00"
         with st.expander("More details"):
