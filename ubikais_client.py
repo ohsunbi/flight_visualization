@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 import time
 from dataclasses import asdict, dataclass, replace
-from datetime import date
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Literal, Optional, Union
 from urllib.parse import urlencode
@@ -17,7 +17,9 @@ ENDPOINTS: dict[Direction, str] = {
     "dep": "selectDep.fois",
     "arr": "selectArr.fois",
 }
-CACHE_TTL_SECONDS = 15 * 60
+RECENT_CACHE_TTL_SECONDS = 30 * 60
+DEFAULT_CACHE_TTL_SECONDS = 12 * 60 * 60
+KST = timezone(timedelta(hours=9))
 
 
 @dataclass(frozen=True)
@@ -47,8 +49,9 @@ def fetch_records(
     cookie_header: Optional[str] = None,
 ) -> dict[str, Any]:
     cache_path = _cache_path(cache_dir, direction, query)
+    cache_ttl_seconds = _cache_ttl_seconds_for_date(query.flight_date)
     if cache_path.exists() and not refresh:
-        cached_payload = _load_cache_if_fresh(cache_path)
+        cached_payload = _load_cache_if_fresh(cache_path, cache_ttl_seconds)
         if cached_payload is not None:
             return cached_payload
 
@@ -194,7 +197,7 @@ def _cache_path(cache_dir: Union[str, Path], direction: Direction, query: Ubikai
     return Path(cache_dir) / filename
 
 
-def _load_cache_if_fresh(cache_path: Path) -> Optional[dict[str, Any]]:
+def _load_cache_if_fresh(cache_path: Path, ttl_seconds: int) -> Optional[dict[str, Any]]:
     try:
         payload = json.loads(cache_path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
@@ -212,9 +215,16 @@ def _load_cache_if_fresh(cache_path: Path) -> Optional[dict[str, Any]]:
     except (TypeError, ValueError):
         return None
 
-    if age_seconds <= CACHE_TTL_SECONDS:
+    if age_seconds <= ttl_seconds:
         return payload
     return None
+
+
+def _cache_ttl_seconds_for_date(flight_date: date) -> int:
+    today_kst = datetime.now(KST).date()
+    if abs((flight_date - today_kst).days) <= 1:
+        return RECENT_CACHE_TTL_SECONDS
+    return DEFAULT_CACHE_TTL_SECONDS
 
 def _serialize_query(query: UbikaisQuery) -> dict[str, Any]:
     raw = asdict(query)
