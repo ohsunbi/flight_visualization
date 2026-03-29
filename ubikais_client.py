@@ -216,7 +216,6 @@ def _load_cache_if_fresh(cache_path: Path) -> Optional[dict[str, Any]]:
         return payload
     return None
 
-
 def _serialize_query(query: UbikaisQuery) -> dict[str, Any]:
     raw = asdict(query)
     raw["flight_date"] = query.date_text
