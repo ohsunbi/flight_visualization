@@ -139,6 +139,9 @@ st.markdown(
         font-weight: 600;
         color: #f3f4f8;
     }
+    div.st-key-mobile_date_nav {
+        display: none;
+    }
     @media (max-width: 768px) {
         div[data-testid="stMainBlockContainer"] {
             padding-top: 1.25rem;
@@ -153,6 +156,9 @@ st.markdown(
         }
         .summary-card-value {
             font-size: 1.75rem;
+        }
+        div.st-key-mobile_date_nav {
+            display: block;
         }
         div.st-key-button_row div[data-testid="stHorizontalBlock"] {
             row-gap: 0.65rem;
@@ -680,6 +686,12 @@ with content_main:
             """,
             unsafe_allow_html=True,
         )
+        with st.container(key="mobile_date_nav"):
+            mobile_prev_col, mobile_next_col = st.columns(2, gap="small")
+            with mobile_prev_col:
+                st.button("◀ Prev", key="btn_prev_day_mobile", on_click=_prev_day, width="stretch")
+            with mobile_next_col:
+                st.button("Next ▶", key="btn_next_day_mobile", on_click=_next_day, width="stretch")
         with st.container(key="button_row"):
             refresh_col, download_col = st.columns(2, gap="small")
             with refresh_col:
