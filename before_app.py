@@ -171,6 +171,9 @@ st.markdown(
             padding: 0.35rem 0.45rem;
             font-size: 0.95rem;
         }
+        div.st-key-mobile_action_set > div + div {
+            margin-top: 0.45rem;
+        }
         div.st-key-button_row div[data-testid="stHorizontalBlock"] {
             display: none;
         }
