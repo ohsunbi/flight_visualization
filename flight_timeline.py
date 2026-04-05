@@ -10,6 +10,8 @@ import matplotlib.pyplot as plt
 import pandas as pd
 from matplotlib import transforms
 
+from airport_codes import icao_to_iata
+
 
 F_BEFORE = 20
 F_AFTER = 10
@@ -32,6 +34,7 @@ class TimelineConfig:
     arr_before: int = 20
     arr_after: int = 30
     show_flt: bool = True
+    show_des_org: bool = False
     show_reg: bool = False
     show_spot: bool = False
 
@@ -39,11 +42,12 @@ class TimelineConfig:
 def departures_from_ubikais(records: list[dict[str, Any]]) -> pd.DataFrame:
     df = pd.DataFrame(records)
     if df.empty:
-        return pd.DataFrame(columns=["FLT", "REG", "TYP", "SPOT", "ATD", "ETD", "STD"])
+        return pd.DataFrame(columns=["FLT", "DES", "REG", "TYP", "SPOT", "ATD", "ETD", "STD"])
 
     return pd.DataFrame(
         {
             "FLT": _series_or_blank(df, "fpId"),
+            "DES": _series_or_blank(df, "apArr"),
             "REG": _series_or_blank(df, "acId"),
             "TYP": _series_or_blank(df, "acType"),
             "SPOT": _series_or_blank(df, "standDep"),
@@ -57,11 +61,12 @@ def departures_from_ubikais(records: list[dict[str, Any]]) -> pd.DataFrame:
 def arrivals_from_ubikais(records: list[dict[str, Any]]) -> pd.DataFrame:
     df = pd.DataFrame(records)
     if df.empty:
-        return pd.DataFrame(columns=["FLT", "REG", "TYP", "SPOT", "ATA", "ETA", "STA"])
+        return pd.DataFrame(columns=["FLT", "ORG", "REG", "TYP", "SPOT", "ATA", "ETA", "STA"])
 
     return pd.DataFrame(
         {
             "FLT": _series_or_blank(df, "fpId"),
+            "ORG": _series_or_blank(df, "apIcao"),
             "REG": _series_or_blank(df, "acId"),
             "TYP": _series_or_blank(df, "acType"),
             "SPOT": _series_or_blank(df, "standArr"),
@@ -201,9 +206,11 @@ def _prepare_departures(dep_df: pd.DataFrame, config: TimelineConfig) -> pd.Data
     dep_df["Label"] = dep_df.apply(
         lambda row: label_for(
             row["FLT"],
+            row.get("DES", ""),
             row.get("REG", ""),
             row.get("SPOT", ""),
             show_flt=config.show_flt,
+            show_des_org=config.show_des_org,
             show_reg=config.show_reg,
             show_spot=config.show_spot,
         ),
@@ -238,9 +245,11 @@ def _prepare_arrivals(arr_df: pd.DataFrame, config: TimelineConfig) -> pd.DataFr
     arr_df["Label"] = arr_df.apply(
         lambda row: label_for(
             row["FLT"],
+            row.get("ORG", ""),
             row.get("REG", ""),
             row.get("SPOT", ""),
             show_flt=config.show_flt,
+            show_des_org=config.show_des_org,
             show_reg=config.show_reg,
             show_spot=config.show_spot,
         ),
@@ -460,16 +469,20 @@ def hhmm_to_datetime(base_date: date, hhmm: Any, service_start_hour: int):
 
 def label_for(
     flt: Any,
+    route_code: Any,
     reg: Any,
     spot: Any = None,
     *,
     show_flt: bool,
+    show_des_org: bool,
     show_reg: bool,
     show_spot: bool,
 ) -> str:
     parts = []
     if show_flt:
         parts.append(str(flt).replace("ESR", "ZE"))
+    if show_des_org and pd.notna(route_code) and str(route_code).strip():
+        parts.append(icao_to_iata(str(route_code)))
     if show_reg and pd.notna(reg) and str(reg).strip():
         parts.append(str(reg))
     if show_spot and pd.notna(spot) and str(spot).strip():

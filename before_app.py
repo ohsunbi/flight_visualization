@@ -477,6 +477,7 @@ type_filter_slot = st.sidebar.empty()
 st.sidebar.markdown("---")
 st.sidebar.subheader("Labels on bars")
 show_flt = st.sidebar.checkbox("Show FLT", value=True)
+show_des_org = st.sidebar.checkbox("Show DES/ORG", value=False)
 show_reg = st.sidebar.checkbox("Show REG", value=False)
 show_spot = st.sidebar.checkbox("Show SPOT", value=False)
 
@@ -639,6 +640,7 @@ config = TimelineConfig(
     arr_before=int(arr_before),
     arr_after=int(arr_after),
     show_flt=show_flt,
+    show_des_org=show_des_org,
     show_reg=show_reg,
     show_spot=show_spot,
 )
