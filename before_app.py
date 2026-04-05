@@ -106,38 +106,42 @@ st.markdown(
     }
     .summary-card {
         flex: 1 1 280px;
-        background: rgba(255, 255, 255, 0.04);
-        border: 1px solid rgba(255, 255, 255, 0.08);
+        background: var(--secondary-background-color);
+        border: 1px solid rgba(128, 128, 128, 0.22);
         border-radius: 14px;
         padding: 0.9rem 1rem 0.85rem;
+        color: var(--text-color);
     }
     .summary-card-label {
         font-size: 0.9rem;
-        color: rgba(250, 250, 250, 0.72);
+        color: inherit;
+        opacity: 0.72;
         margin-bottom: 0.35rem;
     }
     .summary-card-value {
         font-size: 2rem;
         line-height: 1;
         font-weight: 700;
-        color: #f3f4f8;
+        color: inherit;
     }
     .last-fetched-block {
         margin-top: 0.35rem;
         margin-bottom: 0.55rem;
+        color: var(--text-color);
     }
     .last-fetched-label {
         font-size: 0.8rem;
         font-weight: 600;
         letter-spacing: 0.02em;
         text-transform: uppercase;
-        color: rgba(250, 250, 250, 0.62);
+        color: inherit;
+        opacity: 0.68;
         margin-right: 0.4rem;
     }
     .last-fetched-value {
         font-size: 1rem;
         font-weight: 600;
-        color: #f3f4f8;
+        color: inherit;
     }
     div.st-key-mobile_date_nav {
         display: none;

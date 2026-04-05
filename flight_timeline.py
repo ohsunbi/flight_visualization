@@ -14,6 +14,7 @@ from matplotlib import transforms
 F_BEFORE = 20
 F_AFTER = 10
 MAX_ROWS_PER_PANEL = 18
+MIN_TOTAL_RECORDS_FOR_WRAP = 30
 A4_LANDSCAPE_WIDTH = 11.69
 A4_LANDSCAPE_HEIGHT = 8.27
 
@@ -96,20 +97,16 @@ def build_timeline_figure(
 
     start_time = min(start_candidates)
     end_time = max(end_candidates)
-    time_range = pd.date_range(start=start_time, end=end_time, freq=f"{config.interval_min}min")
-    if len(time_range) < 2:
-        time_range = pd.date_range(
-            start=start_time,
-            end=end_time + timedelta(minutes=config.interval_min),
-            freq=f"{config.interval_min}min",
-        )
-
-    mid_times = [
-        time_range[i] + (time_range[i + 1] - time_range[i]) / 2
-        for i in range(len(time_range) - 1)
+    overlap_times = _build_overlap_display_times(start_time, end_time, config.interval_min)
+    half_window = timedelta(minutes=config.interval_min / 2)
+    dep_counts = [
+        _max_overlaps_in_window(dep_intervals, t - half_window, t + half_window)
+        for t in overlap_times
     ]
-    dep_counts = [_count_overlaps(dep_intervals, t) for t in mid_times]
-    arr_counts = [_count_overlaps(arr_intervals, t) for t in mid_times]
+    arr_counts = [
+        _max_overlaps_in_window(arr_intervals, t - half_window, t + half_window)
+        for t in overlap_times
+    ]
 
     dep_block = dep_plot[["Label", "start", "end", "marker", "type", "time_str"]].sort_values("start").reset_index(drop=True)
     arr_block = arr_plot[["Label", "start", "end", "marker", "type", "time_str"]].sort_values("start").reset_index(drop=True)
@@ -118,6 +115,8 @@ def build_timeline_figure(
     total_arr = len(arr_block)
     visible_rows = max(total_dep, total_arr, 1)
     panel_count = max(1, math.ceil(visible_rows / MAX_ROWS_PER_PANEL))
+    if total_dep + total_arr >= MIN_TOTAL_RECORDS_FOR_WRAP:
+        panel_count = max(panel_count, 2)
     rows_per_panel = max(1, math.ceil(visible_rows / panel_count))
     dep_wrapped = _assign_wrap_rows(dep_block, rows_per_panel)
     arr_wrapped = _assign_wrap_rows(arr_block, rows_per_panel)
@@ -159,7 +158,7 @@ def build_timeline_figure(
     )
     _plot_overlap_numbers(
         ax,
-        mid_times=mid_times,
+        display_times=overlap_times,
         dep_counts=dep_counts,
         arr_counts=arr_counts,
     )
@@ -338,7 +337,7 @@ def _plot_wrapped_timeline(
 
 def _plot_overlap_numbers(
     ax,
-    mid_times,
+    display_times,
     dep_counts: list[int],
     arr_counts: list[int],
 ) -> None:
@@ -347,13 +346,13 @@ def _plot_overlap_numbers(
     max_dep = max(dep_counts) if dep_counts else 1
     max_arr = max(arr_counts) if arr_counts else 1
 
-    for mid, total, dep_count, arr_count in zip(mid_times, totals, dep_counts, arr_counts):
+    for display_time, total, dep_count, arr_count in zip(display_times, totals, dep_counts, arr_counts):
         if total > 0:
-            ax.text(mid, -0.06, str(total), transform=trans, ha="center", va="top", fontsize=8, color="black")
+            ax.text(display_time, -0.06, str(total), transform=trans, ha="center", va="top", fontsize=8, color="black")
         if dep_count > 0:
             alpha = 0.35 + 0.65 * (dep_count / max_dep)
             ax.text(
-                mid,
+                display_time,
                 -0.10,
                 str(dep_count),
                 transform=trans,
@@ -365,7 +364,7 @@ def _plot_overlap_numbers(
         if arr_count > 0:
             alpha = 0.35 + 0.65 * (arr_count / max_arr)
             ax.text(
-                mid,
+                display_time,
                 -0.14,
                 str(arr_count),
                 transform=trans,
@@ -384,6 +383,48 @@ def _assign_wrap_rows(block: pd.DataFrame, rows_per_panel: int) -> pd.DataFrame:
     wrapped["wrap_panel"] = wrapped.index // rows_per_panel
     wrapped["wrap_row"] = wrapped.index % rows_per_panel
     return wrapped
+
+
+def _build_overlap_display_times(start_time, end_time, interval_min: int) -> list[datetime]:
+    freq = f"{interval_min}min"
+    first_display = pd.Timestamp(start_time).ceil(freq).to_pydatetime()
+    last_display = pd.Timestamp(end_time).floor(freq).to_pydatetime()
+
+    if first_display > last_display:
+        midpoint = start_time + (end_time - start_time) / 2
+        return [midpoint]
+
+    return list(pd.date_range(start=first_display, end=last_display, freq=freq).to_pydatetime())
+
+
+def _max_overlaps_in_window(intervals: pd.DataFrame, window_start, window_end) -> int:
+    if len(intervals) == 0 or window_start >= window_end:
+        return 0
+
+    overlapping = intervals[(intervals["start"] < window_end) & (intervals["end"] > window_start)]
+    if overlapping.empty:
+        return 0
+
+    events: list[tuple[datetime, int]] = []
+    for row in overlapping.itertuples(index=False):
+        clipped_start = max(row.start, window_start)
+        clipped_end = min(row.end, window_end)
+        if clipped_start < clipped_end:
+            events.append((clipped_start, 1))
+            events.append((clipped_end, -1))
+
+    if not events:
+        return 0
+
+    events.sort(key=lambda event: (event[0], 0 if event[1] < 0 else 1))
+    active = 0
+    max_active = 0
+    for _, delta in events:
+        active += delta
+        if active > max_active:
+            max_active = active
+
+    return max_active
 
 
 
