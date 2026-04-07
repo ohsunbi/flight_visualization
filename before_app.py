@@ -423,16 +423,14 @@ for airline_code in airline_codes:
 selected_airlines = [airline_code for airline_code in airline_codes if airline_preferences.get(airline_code, False)]
 st.sidebar.subheader("Airlines")
 
-with st.sidebar.popover("Filter airlines", width="stretch"):
+with st.sidebar.expander("Filter airlines", expanded=False):
     st.caption("Add airline code")
     with st.form("airline_add_form", border=False, enter_to_submit=False):
-        add_airline_col1, add_airline_col2 = st.columns([3, 1], gap="small")
+        add_airline_col1, add_airline_col2 = st.columns([2, 1], gap="small")
         with add_airline_col1:
             st.text_input("Add airline code", key="custom_airline_input", label_visibility="collapsed")
         with add_airline_col2:
             st.form_submit_button("Add", on_click=_add_custom_airline, width="stretch")
-
-    st.divider()
 
     with st.form("airline_filter_form", border=False, enter_to_submit=False):
         st.caption("Changes are applied only when you click Apply.")
@@ -575,20 +573,14 @@ with type_filter_slot.container():
     st.subheader("Aircraft type")
 
     if available_types:
-        with st.popover("Filter types", width="stretch"):
+        with st.expander("Filter types", expanded=False):
             with st.form("aircraft_type_form", border=False, enter_to_submit=False):
                 st.caption("Changes are applied only when you click Apply.")
 
-                split_index = (len(available_types) + 1) // 2
-                left_types = available_types[:split_index]
-                right_types = available_types[split_index:]
-                type_col1, type_col2 = st.columns(2, gap="medium")
-
-                for col, column_types in ((type_col1, left_types), (type_col2, right_types)):
-                    with col:
-                        for aircraft_type in column_types:
-                            state_key = _aircraft_type_widget_key(aircraft_type)
-                            st.checkbox(aircraft_type, key=state_key)
+                with st.container(key="aircraft_type_list"):
+                    for aircraft_type in available_types:
+                        state_key = _aircraft_type_widget_key(aircraft_type)
+                        st.checkbox(aircraft_type, key=state_key)
 
                 action_col1, action_col2 = st.columns(2, gap="small")
                 with action_col1:
