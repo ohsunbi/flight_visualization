@@ -76,7 +76,7 @@ st.set_page_config(page_title="Flight Handling Schedule", layout="wide")
 KST = timezone(timedelta(hours=9))
 AIRLINE_OPTIONS = [
     ("ESR", "이스타항공"),
-    ("TWB", "티웨이항공"),
+    ("TWB", "트리니티항공"),
     ("APJ", "피치항공"),
     ("PTA", "파라타항공"),
     ("MMA", "미얀마국제항공"),
@@ -84,6 +84,15 @@ AIRLINE_OPTIONS = [
     ("CRK", "홍콩항공"),
 ]
 AIRLINE_LABELS = {code: f"{code} {name}" for code, name in AIRLINE_OPTIONS}
+AIRLINE_SHORT_LABELS = {
+    "ESR": "ESR 이스타",
+    "TWB": "TWB 티웨이",
+    "APJ": "APJ 피치",
+    "PTA": "PTA 파라타",
+    "MMA": "MMA 미얀마",
+    "KZR": "KZR 아스타나",
+    "CRK": "CRK 홍콩",
+}
 DEFAULT_AIRLINE_CODES = [code for code, _ in AIRLINE_OPTIONS]
 
 st.markdown(
@@ -143,6 +152,9 @@ st.markdown(
         font-weight: 600;
         color: inherit;
     }
+    div.st-key-airline_filter_mobile {
+        display: none;
+    }
     div.st-key-mobile_date_nav {
         display: none;
     }
@@ -155,6 +167,12 @@ st.markdown(
         }
         div.st-key-main_panel {
             max-width: 100%;
+        }
+        div.st-key-airline_filter_desktop {
+            display: none;
+        }
+        div.st-key-airline_filter_mobile {
+            display: block;
         }
         .summary-card {
             flex: 1 1 calc(50% - 0.375rem);
@@ -220,8 +238,8 @@ def _request_refresh() -> None:
     st.session_state["_force_refresh"] = True
 
 
-def _airline_widget_key(airline_code: str) -> str:
-    return f"airline_enabled::{airline_code}"
+def _airline_widget_key(airline_code: str, variant: str = "desktop") -> str:
+    return f"airline_enabled::{variant}::{airline_code}"
 
 
 def _normalize_airline_code(value: str) -> str:
@@ -246,17 +264,26 @@ def _airline_summary(selected_codes: list[str], max_visible: int = 3) -> str:
     return preview
 
 
-def _apply_airline_selection(airline_codes: list[str]) -> None:
+def _airline_checkbox_label(airline_code: str, airline_name: str, *, short: bool) -> str:
+    if short:
+        return AIRLINE_SHORT_LABELS.get(airline_code, airline_code)
+    return f"{airline_code} {airline_name}".strip()
+
+
+def _apply_airline_selection(airline_codes: list[str], variant: str) -> None:
     airline_preferences = st.session_state.airline_preferences
     for airline_code in airline_codes:
-        state_key = _airline_widget_key(airline_code)
+        state_key = _airline_widget_key(airline_code, variant)
         airline_preferences[airline_code] = bool(st.session_state.get(state_key, False))
     st.session_state.airline_preferences = airline_preferences
-
-
-def _set_airline_draft(airline_codes: list[str], enabled: bool) -> None:
     for airline_code in airline_codes:
-        st.session_state[_airline_widget_key(airline_code)] = enabled
+        for other_variant in ("desktop", "mobile"):
+            st.session_state[_airline_widget_key(airline_code, other_variant)] = airline_preferences[airline_code]
+
+
+def _set_airline_draft(airline_codes: list[str], enabled: bool, variant: str) -> None:
+    for airline_code in airline_codes:
+        st.session_state[_airline_widget_key(airline_code, variant)] = enabled
 
 
 def _add_custom_airline() -> None:
@@ -272,7 +299,50 @@ def _add_custom_airline() -> None:
 
     if airline_code not in st.session_state.airline_preferences:
         st.session_state.airline_preferences[airline_code] = False
-    st.session_state[_airline_widget_key(airline_code)] = True
+    st.session_state[_airline_widget_key(airline_code, "desktop")] = True
+    st.session_state[_airline_widget_key(airline_code, "mobile")] = True
+
+
+def _render_airline_filter_form(
+    airline_options: list[tuple[str, str]],
+    airline_codes: list[str],
+    *,
+    variant: str,
+    short_labels: bool,
+) -> None:
+    with st.form(f"airline_filter_form_{variant}", border=False, enter_to_submit=False):
+        st.caption("Changes are applied only when you click Apply.")
+
+        for airline_code, airline_name in airline_options:
+            label = _airline_checkbox_label(airline_code, airline_name, short=short_labels)
+            st.checkbox(label, key=_airline_widget_key(airline_code, variant))
+
+        airline_action_col1, airline_action_col2 = st.columns(2, gap="small")
+        with airline_action_col1:
+            st.form_submit_button(
+                "Select all",
+                key=f"airline_select_all_{variant}",
+                on_click=_set_airline_draft,
+                args=(airline_codes, True, variant),
+                width="stretch",
+            )
+        with airline_action_col2:
+            st.form_submit_button(
+                "Clear",
+                key=f"airline_clear_all_{variant}",
+                on_click=_set_airline_draft,
+                args=(airline_codes, False, variant),
+                width="stretch",
+            )
+
+        st.form_submit_button(
+            "Apply",
+            key=f"airline_apply_{variant}",
+            on_click=_apply_airline_selection,
+            args=(airline_codes, variant),
+            type="primary",
+            width="stretch",
+        )
 
 
 def _aircraft_type_widget_key(aircraft_type: str) -> str:
@@ -416,54 +486,37 @@ for airline_code in airline_codes:
     if airline_code not in airline_preferences:
         airline_preferences[airline_code] = False
 
-    draft_key = _airline_widget_key(airline_code)
-    if draft_key not in st.session_state:
-        st.session_state[draft_key] = airline_preferences[airline_code]
+    for variant in ("desktop", "mobile"):
+        draft_key = _airline_widget_key(airline_code, variant)
+        if draft_key not in st.session_state:
+            st.session_state[draft_key] = airline_preferences[airline_code]
 
 selected_airlines = [airline_code for airline_code in airline_codes if airline_preferences.get(airline_code, False)]
 st.sidebar.subheader("Airlines")
 
 with st.sidebar.expander("Filter airlines", expanded=False):
-    st.caption("Add airline code")
+    st.caption("Airline 3 Code")
     with st.form("airline_add_form", border=False, enter_to_submit=False):
         add_airline_col1, add_airline_col2 = st.columns([2, 1], gap="small")
         with add_airline_col1:
-            st.text_input("Add airline code", key="custom_airline_input", label_visibility="collapsed")
+            st.text_input("Airline 3 Code", key="custom_airline_input", label_visibility="collapsed")
         with add_airline_col2:
             st.form_submit_button("Add", on_click=_add_custom_airline, width="stretch")
 
-    with st.form("airline_filter_form", border=False, enter_to_submit=False):
-        st.caption("Changes are applied only when you click Apply.")
+    with st.container(key="airline_filter_desktop"):
+        _render_airline_filter_form(
+            airline_options,
+            airline_codes,
+            variant="desktop",
+            short_labels=False,
+        )
 
-        for airline_code, airline_name in airline_options:
-            label = f"{airline_code} {airline_name}".strip()
-            st.checkbox(label, key=_airline_widget_key(airline_code))
-
-        airline_action_col1, airline_action_col2 = st.columns(2, gap="small")
-        with airline_action_col1:
-            st.form_submit_button(
-                "Select all",
-                key="airline_select_all",
-                on_click=_set_airline_draft,
-                args=(airline_codes, True),
-                width="stretch",
-            )
-        with airline_action_col2:
-            st.form_submit_button(
-                "Clear",
-                key="airline_clear_all",
-                on_click=_set_airline_draft,
-                args=(airline_codes, False),
-                width="stretch",
-            )
-
-        st.form_submit_button(
-            "Apply",
-            key="airline_apply",
-            on_click=_apply_airline_selection,
-            args=(airline_codes,),
-            type="primary",
-            width="stretch",
+    with st.container(key="airline_filter_mobile"):
+        _render_airline_filter_form(
+            airline_options,
+            airline_codes,
+            variant="mobile",
+            short_labels=True,
         )
 
 st.sidebar.markdown(
