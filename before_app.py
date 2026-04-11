@@ -311,7 +311,7 @@ def _render_airline_filter_form(
     short_labels: bool,
 ) -> None:
     with st.form(f"airline_filter_form_{variant}", border=False, enter_to_submit=False):
-        st.caption("Changes are applied only when you click Apply.")
+        st.caption("Click Apply to update.")
 
         for airline_code, airline_name in airline_options:
             label = _airline_checkbox_label(airline_code, airline_name, short=short_labels)
@@ -628,7 +628,7 @@ with type_filter_slot.container():
     if available_types:
         with st.expander("Filter types", expanded=False):
             with st.form("aircraft_type_form", border=False, enter_to_submit=False):
-                st.caption("Changes are applied only when you click Apply.")
+                st.caption("Click Apply to update.")
 
                 with st.container(key="aircraft_type_list"):
                     for aircraft_type in available_types:
