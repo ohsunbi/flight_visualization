@@ -924,6 +924,8 @@ desired_url_signature = _url_signature(desired_url_params)
 if desired_url_signature != current_url_signature:
     st.query_params.from_dict(desired_url_params)
     st.session_state["_applied_url_signature"] = desired_url_signature
+    st.session_state["_applied_type_url_signature"] = desired_url_signature
+    st.session_state["_url_excluded_types"] = _normalize_csv_values(desired_url_params.get("exclude_types"))
 
 config = TimelineConfig(
     base_date=base_date,
