@@ -74,6 +74,26 @@ except ImportError:
 st.set_page_config(page_title="Flight Handling Schedule", layout="wide")
 
 KST = timezone(timedelta(hours=9))
+DEFAULT_LABEL_FLAGS = {
+    "show_flt": True,
+    "show_des_org": False,
+    "show_reg": False,
+    "show_spot": False,
+}
+DEFAULT_TIMELINE_VALUES = {
+    "service_start_hour": 0,
+    "interval_min": 30,
+    "dep_before": 50,
+    "dep_after": 10,
+    "arr_before": 20,
+    "arr_after": 30,
+}
+LABEL_QUERY_KEYS = (
+    ("flt", "show_flt"),
+    ("desorg", "show_des_org"),
+    ("reg", "show_reg"),
+    ("spot", "show_spot"),
+)
 AIRLINE_OPTIONS = [
     ("ESR", "이스타항공"),
     ("TWB", "트리니티항공"),
@@ -216,6 +236,196 @@ if "aircraft_type_preferences" not in st.session_state:
     st.session_state.aircraft_type_preferences = {}
 if "_force_refresh" not in st.session_state:
     st.session_state["_force_refresh"] = False
+if "_applied_url_signature" not in st.session_state:
+    st.session_state["_applied_url_signature"] = None
+if "_applied_type_url_signature" not in st.session_state:
+    st.session_state["_applied_type_url_signature"] = None
+if "_url_excluded_types" not in st.session_state:
+    st.session_state["_url_excluded_types"] = []
+for state_key, default_value in DEFAULT_LABEL_FLAGS.items():
+    if state_key not in st.session_state:
+        st.session_state[state_key] = default_value
+for state_key, default_value in DEFAULT_TIMELINE_VALUES.items():
+    if state_key not in st.session_state:
+        st.session_state[state_key] = default_value
+
+
+def _normalize_csv_values(value: Optional[str], *, upper: bool = False) -> list[str]:
+    if value is None:
+        return []
+
+    normalized_values = []
+    for part in str(value).split(","):
+        item = part.strip()
+        if not item:
+            continue
+        item = item.upper() if upper else item
+        if item not in normalized_values:
+            normalized_values.append(item)
+    return normalized_values
+
+
+def _coerce_int_param(
+    value: Optional[str],
+    *,
+    default: int,
+    minimum: Optional[int] = None,
+    maximum: Optional[int] = None,
+    allowed: Optional[list[int]] = None,
+) -> int:
+    if value is None or str(value).strip() == "":
+        return default
+
+    try:
+        parsed = int(str(value).strip())
+    except ValueError:
+        return default
+
+    if allowed is not None and parsed not in allowed:
+        return default
+    if minimum is not None and parsed < minimum:
+        return default
+    if maximum is not None and parsed > maximum:
+        return default
+    return parsed
+
+
+def _url_signature(params: dict[str, str]) -> tuple[tuple[str, str], ...]:
+    return tuple(sorted((str(key), str(value)) for key, value in params.items()))
+
+
+def _read_url_state(params: dict[str, str]) -> dict:
+    airlines = _normalize_csv_values(params.get("airlines"), upper=True)
+    exclude_types = _normalize_csv_values(params.get("exclude_types"))
+
+    label_flags = dict(DEFAULT_LABEL_FLAGS)
+    if "labels" in params:
+        label_flags = {state_key: False for _, state_key in LABEL_QUERY_KEYS}
+        raw_labels = str(params.get("labels", "")).strip().lower()
+        if raw_labels != "none":
+            selected_label_keys = {label.lower() for label in _normalize_csv_values(raw_labels)}
+            for query_key, state_key in LABEL_QUERY_KEYS:
+                label_flags[state_key] = query_key in selected_label_keys
+
+    return {
+        "airlines": airlines,
+        "exclude_types": exclude_types,
+        "labels": label_flags,
+        "service_start_hour": _coerce_int_param(
+            params.get("service_start"),
+            default=DEFAULT_TIMELINE_VALUES["service_start_hour"],
+            minimum=0,
+            maximum=23,
+        ),
+        "interval_min": _coerce_int_param(
+            params.get("interval"),
+            default=DEFAULT_TIMELINE_VALUES["interval_min"],
+            allowed=[10, 20, 30],
+        ),
+        "dep_before": _coerce_int_param(
+            params.get("dep_before"),
+            default=DEFAULT_TIMELINE_VALUES["dep_before"],
+            minimum=0,
+            maximum=240,
+        ),
+        "dep_after": _coerce_int_param(
+            params.get("dep_after"),
+            default=DEFAULT_TIMELINE_VALUES["dep_after"],
+            minimum=0,
+            maximum=240,
+        ),
+        "arr_before": _coerce_int_param(
+            params.get("arr_before"),
+            default=DEFAULT_TIMELINE_VALUES["arr_before"],
+            minimum=0,
+            maximum=240,
+        ),
+        "arr_after": _coerce_int_param(
+            params.get("arr_after"),
+            default=DEFAULT_TIMELINE_VALUES["arr_after"],
+            minimum=0,
+            maximum=240,
+        ),
+    }
+
+
+def _apply_url_state(params: dict[str, str]) -> None:
+    url_state = _read_url_state(params)
+
+    url_airlines = url_state["airlines"] or ["ESR"]
+    airline_preferences = st.session_state.airline_preferences
+    custom_airline_codes = list(st.session_state.custom_airline_codes)
+
+    for airline_code in url_airlines:
+        if airline_code not in DEFAULT_AIRLINE_CODES and airline_code not in custom_airline_codes:
+            custom_airline_codes.append(airline_code)
+    st.session_state.custom_airline_codes = custom_airline_codes
+
+    all_airline_codes = list(dict.fromkeys([*DEFAULT_AIRLINE_CODES, *custom_airline_codes, *url_airlines]))
+    for airline_code in all_airline_codes:
+        airline_preferences[airline_code] = airline_code in url_airlines
+        for variant in ("desktop", "mobile"):
+            st.session_state[_airline_widget_key(airline_code, variant)] = airline_preferences[airline_code]
+    st.session_state.airline_preferences = airline_preferences
+
+    for state_key, enabled in url_state["labels"].items():
+        st.session_state[state_key] = enabled
+
+    for state_key in DEFAULT_TIMELINE_VALUES:
+        st.session_state[state_key] = url_state[state_key]
+
+    st.session_state["_url_excluded_types"] = url_state["exclude_types"]
+
+
+def _build_url_params(
+    *,
+    selected_airlines: list[str],
+    available_types: list[str],
+    selected_types: list[str],
+    show_flt: bool,
+    show_des_org: bool,
+    show_reg: bool,
+    show_spot: bool,
+    service_start_hour: int,
+    interval_min: int,
+    dep_before: int,
+    dep_after: int,
+    arr_before: int,
+    arr_after: int,
+) -> dict[str, str]:
+    params: dict[str, str] = {}
+
+    if selected_airlines != ["ESR"]:
+        params["airlines"] = ",".join(selected_airlines)
+
+    excluded_types = [aircraft_type for aircraft_type in available_types if aircraft_type not in selected_types]
+    if excluded_types:
+        params["exclude_types"] = ",".join(excluded_types)
+
+    current_labels = {
+        "show_flt": bool(show_flt),
+        "show_des_org": bool(show_des_org),
+        "show_reg": bool(show_reg),
+        "show_spot": bool(show_spot),
+    }
+    if current_labels != DEFAULT_LABEL_FLAGS:
+        selected_label_keys = [query_key for query_key, state_key in LABEL_QUERY_KEYS if current_labels[state_key]]
+        params["labels"] = ",".join(selected_label_keys) if selected_label_keys else "none"
+
+    if int(service_start_hour) != DEFAULT_TIMELINE_VALUES["service_start_hour"]:
+        params["service_start"] = str(int(service_start_hour))
+    if int(interval_min) != DEFAULT_TIMELINE_VALUES["interval_min"]:
+        params["interval"] = str(int(interval_min))
+    if int(dep_before) != DEFAULT_TIMELINE_VALUES["dep_before"]:
+        params["dep_before"] = str(int(dep_before))
+    if int(dep_after) != DEFAULT_TIMELINE_VALUES["dep_after"]:
+        params["dep_after"] = str(int(dep_after))
+    if int(arr_before) != DEFAULT_TIMELINE_VALUES["arr_before"]:
+        params["arr_before"] = str(int(arr_before))
+    if int(arr_after) != DEFAULT_TIMELINE_VALUES["arr_after"]:
+        params["arr_after"] = str(int(arr_after))
+
+    return params
 
 
 def _normalize_base_date() -> None:
@@ -311,7 +521,7 @@ def _render_airline_filter_form(
     short_labels: bool,
 ) -> None:
     with st.form(f"airline_filter_form_{variant}", border=False, enter_to_submit=False):
-        st.caption("Click Apply to update.")
+        st.caption("Click Apply to apply changes.")
 
         for airline_code, airline_name in airline_options:
             label = _airline_checkbox_label(airline_code, airline_name, short=short_labels)
@@ -468,6 +678,12 @@ def _merge_service_day_payload(
     }
 
 
+current_url_params = st.query_params.to_dict()
+current_url_signature = _url_signature(current_url_params)
+if st.session_state["_applied_url_signature"] != current_url_signature:
+    _apply_url_state(current_url_params)
+    st.session_state["_applied_url_signature"] = current_url_signature
+
 st.sidebar.date_input("Date", key="base_date", label_visibility="collapsed")
 date_nav_col1, date_nav_col2 = st.sidebar.columns(2, gap="small")
 with date_nav_col1:
@@ -527,26 +743,26 @@ type_filter_slot = st.sidebar.empty()
 
 st.sidebar.markdown("---")
 st.sidebar.subheader("Labels on bars")
-show_flt = st.sidebar.checkbox("Show FLT", value=True)
-show_des_org = st.sidebar.checkbox("Show DES/ORG", value=False)
-show_reg = st.sidebar.checkbox("Show REG", value=False)
-show_spot = st.sidebar.checkbox("Show SPOT", value=False)
+show_flt = st.sidebar.checkbox("Show FLT", key="show_flt")
+show_des_org = st.sidebar.checkbox("Show DES/ORG", key="show_des_org")
+show_reg = st.sidebar.checkbox("Show REG", key="show_reg")
+show_spot = st.sidebar.checkbox("Show SPOT", key="show_spot")
 
 st.sidebar.header("Timeline Settings")
 service_start_hour = st.sidebar.number_input(
     "Service day starts at (hour)",
     min_value=0,
     max_value=23,
-    value=0,
     step=1,
+    key="service_start_hour",
 )
-interval_min = st.sidebar.selectbox("Overlap interval (min)", options=[10, 20, 30], index=2)
+interval_min = st.sidebar.selectbox("Overlap interval (min)", options=[10, 20, 30], key="interval_min")
 
 st.sidebar.subheader("Operation windows (minutes)")
-dep_before = st.sidebar.number_input("Departure window start (before ATD)", 0, 240, 50, 5)
-dep_after = st.sidebar.number_input("Departure window end (after ATD)", 0, 240, 10, 5)
-arr_before = st.sidebar.number_input("Arrival window start (before ATA)", 0, 240, 20, 5)
-arr_after = st.sidebar.number_input("Arrival window end (after ATA)", 0, 240, 30, 5)
+dep_before = st.sidebar.number_input("Departure window start (before ATD)", 0, 240, step=5, key="dep_before")
+dep_after = st.sidebar.number_input("Departure window end (after ATD)", 0, 240, step=5, key="dep_after")
+arr_before = st.sidebar.number_input("Arrival window start (before ATA)", 0, 240, step=5, key="arr_before")
+arr_after = st.sidebar.number_input("Arrival window end (after ATA)", 0, 240, step=5, key="arr_after")
 
 st.sidebar.markdown("---")
 departure_airport = st.sidebar.text_input("Departure airport", value="RKSI").strip().upper()
@@ -613,6 +829,13 @@ with type_filter_slot.container():
 
     selected_types = []
     if available_types:
+        if st.session_state.get("_applied_type_url_signature") != current_url_signature:
+            excluded_types = set(st.session_state.get("_url_excluded_types", []))
+            for aircraft_type in available_types:
+                type_preferences[aircraft_type] = aircraft_type not in excluded_types
+                st.session_state[_aircraft_type_widget_key(aircraft_type)] = type_preferences[aircraft_type]
+            st.session_state["_applied_type_url_signature"] = current_url_signature
+
         for aircraft_type in available_types:
             if aircraft_type not in type_preferences:
                 type_preferences[aircraft_type] = True
@@ -628,7 +851,7 @@ with type_filter_slot.container():
     if available_types:
         with st.expander("Filter types", expanded=False):
             with st.form("aircraft_type_form", border=False, enter_to_submit=False):
-                st.caption("Click Apply to update.")
+                st.caption("Click Apply to apply changes.")
 
                 with st.container(key="aircraft_type_list"):
                     for aircraft_type in available_types:
@@ -675,6 +898,26 @@ if selected_types:
 else:
     dep_df = dep_df.iloc[0:0].copy()
     arr_df = arr_df.iloc[0:0].copy()
+
+desired_url_params = _build_url_params(
+    selected_airlines=selected_airlines,
+    available_types=available_types,
+    selected_types=selected_types,
+    show_flt=show_flt,
+    show_des_org=show_des_org,
+    show_reg=show_reg,
+    show_spot=show_spot,
+    service_start_hour=int(service_start_hour),
+    interval_min=int(interval_min),
+    dep_before=int(dep_before),
+    dep_after=int(dep_after),
+    arr_before=int(arr_before),
+    arr_after=int(arr_after),
+)
+desired_url_signature = _url_signature(desired_url_params)
+if desired_url_signature != current_url_signature:
+    st.query_params.from_dict(desired_url_params)
+    st.session_state["_applied_url_signature"] = desired_url_signature
 
 config = TimelineConfig(
     base_date=base_date,
