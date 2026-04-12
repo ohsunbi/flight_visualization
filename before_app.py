@@ -79,6 +79,7 @@ DEFAULT_LABEL_FLAGS = {
     "show_des_org": False,
     "show_reg": False,
     "show_spot": False,
+    "show_turnaround": False,
 }
 DEFAULT_TIMELINE_VALUES = {
     "service_start_hour": 0,
@@ -87,12 +88,14 @@ DEFAULT_TIMELINE_VALUES = {
     "dep_after": 10,
     "arr_before": 20,
     "arr_after": 30,
+    "turnaround_limit_min": 120,
 }
 LABEL_QUERY_KEYS = (
     ("flt", "show_flt"),
     ("desorg", "show_des_org"),
     ("reg", "show_reg"),
     ("spot", "show_spot"),
+    ("turn", "show_turnaround"),
 )
 AIRLINE_OPTIONS = [
     ("ESR", "이스타항공"),
@@ -346,6 +349,12 @@ def _read_url_state(params: dict[str, str]) -> dict:
             minimum=0,
             maximum=240,
         ),
+        "turnaround_limit_min": _coerce_int_param(
+            params.get("turn_limit"),
+            default=DEFAULT_TIMELINE_VALUES["turnaround_limit_min"],
+            minimum=1,
+            maximum=1440,
+        ),
     }
 
 
@@ -385,12 +394,14 @@ def _build_url_params(
     show_des_org: bool,
     show_reg: bool,
     show_spot: bool,
+    show_turnaround: bool,
     service_start_hour: int,
     interval_min: int,
     dep_before: int,
     dep_after: int,
     arr_before: int,
     arr_after: int,
+    turnaround_limit_min: int,
 ) -> dict[str, str]:
     params: dict[str, str] = {}
 
@@ -410,6 +421,7 @@ def _build_url_params(
         "show_des_org": bool(show_des_org),
         "show_reg": bool(show_reg),
         "show_spot": bool(show_spot),
+        "show_turnaround": bool(show_turnaround),
     }
     if current_labels != DEFAULT_LABEL_FLAGS:
         selected_label_keys = [query_key for query_key, state_key in LABEL_QUERY_KEYS if current_labels[state_key]]
@@ -427,6 +439,8 @@ def _build_url_params(
         params["arr_before"] = str(int(arr_before))
     if int(arr_after) != DEFAULT_TIMELINE_VALUES["arr_after"]:
         params["arr_after"] = str(int(arr_after))
+    if int(turnaround_limit_min) != DEFAULT_TIMELINE_VALUES["turnaround_limit_min"]:
+        params["turn_limit"] = str(int(turnaround_limit_min))
 
     return params
 
@@ -746,10 +760,11 @@ type_filter_slot = st.sidebar.empty()
 
 st.sidebar.markdown("---")
 st.sidebar.subheader("Labels on bars")
-show_flt = st.sidebar.checkbox("Show FLT", key="show_flt")
-show_des_org = st.sidebar.checkbox("Show DES/ORG", key="show_des_org")
-show_reg = st.sidebar.checkbox("Show REG", key="show_reg")
-show_spot = st.sidebar.checkbox("Show SPOT", key="show_spot")
+show_flt = st.sidebar.checkbox("FLT", key="show_flt")
+show_des_org = st.sidebar.checkbox("DES/ORG", key="show_des_org")
+show_reg = st.sidebar.checkbox("REG", key="show_reg")
+show_spot = st.sidebar.checkbox("SPOT", key="show_spot")
+show_turnaround = st.sidebar.checkbox("Turn-around", key="show_turnaround")
 
 st.sidebar.header("Timeline Settings")
 service_start_hour = st.sidebar.number_input(
@@ -761,11 +776,19 @@ service_start_hour = st.sidebar.number_input(
 )
 interval_min = st.sidebar.selectbox("Overlap interval (min)", options=[10, 20, 30], key="interval_min")
 
-st.sidebar.subheader("Operation windows (minutes)")
-dep_before = st.sidebar.number_input("Departure window start (before ATD)", 0, 240, step=5, key="dep_before")
-dep_after = st.sidebar.number_input("Departure window end (after ATD)", 0, 240, step=5, key="dep_after")
-arr_before = st.sidebar.number_input("Arrival window start (before ATA)", 0, 240, step=5, key="arr_before")
-arr_after = st.sidebar.number_input("Arrival window end (after ATA)", 0, 240, step=5, key="arr_after")
+st.sidebar.subheader("Handling time (min)")
+dep_before = st.sidebar.number_input("Departure handling (before ATD)", 0, 240, step=5, key="dep_before")
+dep_after = st.sidebar.number_input("Departure handling (after ATD)", 0, 240, step=5, key="dep_after")
+arr_before = st.sidebar.number_input("Arrival handling (before ATA)", 0, 240, step=5, key="arr_before")
+arr_after = st.sidebar.number_input("Arrival handling (after ATA)", 0, 240, step=5, key="arr_after")
+st.sidebar.markdown("---")
+turnaround_limit_min = st.sidebar.number_input(
+    "Turn-around limit (min)",
+    min_value=1,
+    max_value=1440,
+    step=5,
+    key="turnaround_limit_min",
+)
 
 st.sidebar.markdown("---")
 departure_airport = st.sidebar.text_input("Departure airport", value="RKSI").strip().upper()
@@ -913,12 +936,14 @@ desired_url_params = _build_url_params(
     show_des_org=show_des_org,
     show_reg=show_reg,
     show_spot=show_spot,
+    show_turnaround=show_turnaround,
     service_start_hour=int(service_start_hour),
     interval_min=int(interval_min),
     dep_before=int(dep_before),
     dep_after=int(dep_after),
     arr_before=int(arr_before),
     arr_after=int(arr_after),
+    turnaround_limit_min=int(turnaround_limit_min),
 )
 desired_url_signature = _url_signature(desired_url_params)
 if desired_url_signature != current_url_signature:
@@ -935,10 +960,12 @@ config = TimelineConfig(
     dep_after=int(dep_after),
     arr_before=int(arr_before),
     arr_after=int(arr_after),
+    turnaround_limit_min=int(turnaround_limit_min),
     show_flt=show_flt,
     show_des_org=show_des_org,
     show_reg=show_reg,
     show_spot=show_spot,
+    show_turnaround=show_turnaround,
 )
 
 try:

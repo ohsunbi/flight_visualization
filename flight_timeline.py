@@ -33,10 +33,12 @@ class TimelineConfig:
     dep_after: int = 10
     arr_before: int = 20
     arr_after: int = 30
+    turnaround_limit_min: int = 120
     show_flt: bool = True
     show_des_org: bool = False
     show_reg: bool = False
     show_spot: bool = False
+    show_turnaround: bool = False
 
 
 def departures_from_ubikais(records: list[dict[str, Any]]) -> pd.DataFrame:
@@ -113,8 +115,8 @@ def build_timeline_figure(
         for t in overlap_times
     ]
 
-    dep_block = dep_plot[["Label", "start", "end", "marker", "type", "time_str"]].sort_values("start").reset_index(drop=True)
-    arr_block = arr_plot[["Label", "start", "end", "marker", "type", "time_str"]].sort_values("start").reset_index(drop=True)
+    dep_block = dep_plot[["source_index", "Label", "start", "end", "marker", "type", "time_str"]].sort_values("start").reset_index(drop=True)
+    arr_block = arr_plot[["source_index", "Label", "start", "end", "marker", "type", "time_str"]].sort_values("start").reset_index(drop=True)
 
     total_dep = len(dep_block)
     total_arr = len(arr_block)
@@ -161,6 +163,15 @@ def build_timeline_figure(
         x_start=start_time,
         x_end=end_time,
     )
+    if config.show_turnaround:
+        _plot_turnaround_links(
+            ax,
+            dep_plot=dep_plot,
+            arr_plot=arr_plot,
+            dep_block=dep_wrapped,
+            arr_block=arr_wrapped,
+            turnaround_limit=timedelta(minutes=int(config.turnaround_limit_min)),
+        )
     _plot_overlap_numbers(
         ax,
         display_times=overlap_times,
@@ -182,6 +193,7 @@ def build_timeline_figure(
 
 def _prepare_departures(dep_df: pd.DataFrame, config: TimelineConfig) -> pd.DataFrame:
     dep_df = dep_df.copy()
+    dep_df["source_index"] = dep_df.index
     dep_df["TIME_RAW"] = dep_df.apply(_pick_time_dep, axis=1)
     dep_df = dep_df[pd.notna(dep_df["TIME_RAW"])].reset_index(drop=True)
 
@@ -221,6 +233,7 @@ def _prepare_departures(dep_df: pd.DataFrame, config: TimelineConfig) -> pd.Data
 
 def _prepare_arrivals(arr_df: pd.DataFrame, config: TimelineConfig) -> pd.DataFrame:
     arr_df = arr_df.copy()
+    arr_df["source_index"] = arr_df.index
     arr_df["TIME_RAW"] = arr_df.apply(_pick_time_arr, axis=1)
     arr_df = arr_df[pd.notna(arr_df["TIME_RAW"])].reset_index(drop=True)
 
@@ -434,6 +447,116 @@ def _max_overlaps_in_window(intervals: pd.DataFrame, window_start, window_end) -
             max_active = active
 
     return max_active
+
+
+def _normalize_turnaround_key(value: Any) -> str:
+    if pd.isna(value):
+        return ""
+
+    normalized = str(value).strip().upper()
+    if normalized in {"", "NAN", "NONE", "NULL"}:
+        return ""
+    return normalized
+
+
+def _find_turnaround_pairs(
+    dep_plot: pd.DataFrame,
+    arr_plot: pd.DataFrame,
+    turnaround_limit: timedelta,
+) -> list[tuple[int, int]]:
+    if dep_plot.empty or arr_plot.empty:
+        return []
+
+    dep_candidates = []
+    for dep_index, row in dep_plot.iterrows():
+        reg = _normalize_turnaround_key(row.get("REG", ""))
+        spot = _normalize_turnaround_key(row.get("SPOT", ""))
+        marker = row.get("marker")
+        if not reg or not spot or pd.isna(marker):
+            continue
+        dep_candidates.append((dep_index, reg, spot, marker))
+
+    used_dep_indices: set[int] = set()
+    matches: list[tuple[int, int]] = []
+
+    arr_sorted = arr_plot.sort_values("marker").reset_index()
+    for _, arr_row in arr_sorted.iterrows():
+        arr_index = int(arr_row["index"])
+        reg = _normalize_turnaround_key(arr_row.get("REG", ""))
+        spot = _normalize_turnaround_key(arr_row.get("SPOT", ""))
+        arr_marker = arr_row.get("marker")
+        if not reg or not spot or pd.isna(arr_marker):
+            continue
+
+        best_dep_index = None
+        best_gap = None
+        for dep_index, dep_reg, dep_spot, dep_marker in dep_candidates:
+            if dep_index in used_dep_indices:
+                continue
+            if dep_reg != reg or dep_spot != spot:
+                continue
+            gap = dep_marker - arr_marker
+            if gap <= timedelta(0) or gap >= turnaround_limit:
+                continue
+            if best_gap is None or gap < best_gap:
+                best_gap = gap
+                best_dep_index = dep_index
+
+        if best_dep_index is not None:
+            used_dep_indices.add(best_dep_index)
+            matches.append((arr_index, best_dep_index))
+
+    return matches
+
+
+def _plot_turnaround_links(
+    ax,
+    *,
+    dep_plot: pd.DataFrame,
+    arr_plot: pd.DataFrame,
+    dep_block: pd.DataFrame,
+    arr_block: pd.DataFrame,
+    turnaround_limit: timedelta,
+) -> None:
+    turnaround_pairs = _find_turnaround_pairs(dep_plot, arr_plot, turnaround_limit)
+    if not turnaround_pairs:
+        return
+
+    dep_y_lookup = {
+        int(row["source_index"]): float(row["wrap_row"])
+        for _, row in dep_block.iterrows()
+        if pd.notna(row.get("source_index"))
+    }
+    arr_y_lookup = {
+        int(row["source_index"]): float(row["wrap_row"]) + 0.55
+        for _, row in arr_block.iterrows()
+        if pd.notna(row.get("source_index"))
+    }
+
+    for arr_index, dep_index in turnaround_pairs:
+        if arr_index not in arr_y_lookup or dep_index not in dep_y_lookup:
+            continue
+
+        arr_marker = arr_plot.iloc[arr_index]["marker"]
+        dep_marker = dep_plot.iloc[dep_index]["marker"]
+        arr_y = arr_y_lookup[arr_index]
+        dep_y = dep_y_lookup[dep_index]
+
+        ax.annotate(
+            "",
+            xy=(dep_marker, dep_y),
+            xytext=(arr_marker, arr_y),
+            arrowprops={
+                "arrowstyle": "->",
+                "color": "#5f6b7a",
+                "linewidth": 1.5,
+                "alpha": 0.9,
+                "shrinkA": 4,
+                "shrinkB": 4,
+                "mutation_scale": 12,
+            },
+            zorder=2.6,
+        )
 
 
 
