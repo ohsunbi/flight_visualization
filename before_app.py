@@ -832,8 +832,8 @@ with type_filter_slot.container():
 
     selected_types = []
     if available_types:
+        excluded_types = set(st.session_state.get("_url_excluded_types", []))
         if st.session_state.get("_applied_type_url_signature") != current_url_signature:
-            excluded_types = set(st.session_state.get("_url_excluded_types", []))
             for aircraft_type in available_types:
                 type_preferences[aircraft_type] = aircraft_type not in excluded_types
                 st.session_state[_aircraft_type_widget_key(aircraft_type)] = type_preferences[aircraft_type]
@@ -841,7 +841,7 @@ with type_filter_slot.container():
 
         for aircraft_type in available_types:
             if aircraft_type not in type_preferences:
-                type_preferences[aircraft_type] = True
+                type_preferences[aircraft_type] = aircraft_type not in excluded_types
 
             draft_key = _aircraft_type_widget_key(aircraft_type)
             if draft_key not in st.session_state:
@@ -852,6 +852,7 @@ with type_filter_slot.container():
     st.subheader("Aircraft type")
 
     if available_types:
+        apply_aircraft_type = False
         with st.expander("Filter types", expanded=False):
             with st.form("aircraft_type_form", border=False, enter_to_submit=False):
                 st.caption("Click Apply to apply changes.")
@@ -879,14 +880,17 @@ with type_filter_slot.container():
                         width="stretch",
                     )
 
-                st.form_submit_button(
+                apply_aircraft_type = st.form_submit_button(
                     "Apply",
                     key="aircraft_type_apply",
-                    on_click=_apply_aircraft_type_selection,
-                    args=(available_types,),
                     type="primary",
                     width="stretch",
                 )
+
+        if apply_aircraft_type:
+            _apply_aircraft_type_selection(available_types)
+            type_preferences = st.session_state.aircraft_type_preferences
+            selected_types = [aircraft_type for aircraft_type in available_types if type_preferences.get(aircraft_type, True)]
 
         st.markdown(
             f"Selected: <span style='color:#ff6b5a; font-weight:600;'>{_aircraft_type_summary(selected_types)}</span>",
