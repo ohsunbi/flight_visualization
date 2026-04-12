@@ -380,8 +380,7 @@ def _apply_url_state(params: dict[str, str]) -> None:
 def _build_url_params(
     *,
     selected_airlines: list[str],
-    available_types: list[str],
-    selected_types: list[str],
+    type_preferences: dict[str, bool],
     show_flt: bool,
     show_des_org: bool,
     show_reg: bool,
@@ -398,7 +397,11 @@ def _build_url_params(
     if selected_airlines != ["ESR"]:
         params["airlines"] = ",".join(selected_airlines)
 
-    excluded_types = [aircraft_type for aircraft_type in available_types if aircraft_type not in selected_types]
+    excluded_types = sorted(
+        aircraft_type
+        for aircraft_type, enabled in type_preferences.items()
+        if not bool(enabled)
+    )
     if excluded_types:
         params["exclude_types"] = ",".join(excluded_types)
 
@@ -901,8 +904,7 @@ else:
 
 desired_url_params = _build_url_params(
     selected_airlines=selected_airlines,
-    available_types=available_types,
-    selected_types=selected_types,
+    type_preferences=type_preferences,
     show_flt=show_flt,
     show_des_org=show_des_org,
     show_reg=show_reg,
