@@ -27,6 +27,7 @@ COL_DEP = "#d62728"
 @dataclass(frozen=True)
 class TimelineConfig:
     base_date: date
+    time_basis: str = "ground"
     service_start_hour: int = 2
     interval_min: int = 30
     dep_before: int = 50
@@ -44,7 +45,7 @@ class TimelineConfig:
 def departures_from_ubikais(records: list[dict[str, Any]]) -> pd.DataFrame:
     df = pd.DataFrame(records)
     if df.empty:
-        return pd.DataFrame(columns=["FLT", "DES", "REG", "TYP", "SPOT", "ATD", "ETD", "STD"])
+        return pd.DataFrame(columns=["FLT", "DES", "REG", "TYP", "SPOT", "BLOCK_OFF", "ATD", "ETD", "STD"])
 
     return pd.DataFrame(
         {
@@ -53,6 +54,7 @@ def departures_from_ubikais(records: list[dict[str, Any]]) -> pd.DataFrame:
             "REG": _series_or_blank(df, "acId"),
             "TYP": _series_or_blank(df, "acType"),
             "SPOT": _series_or_blank(df, "standDep"),
+            "BLOCK_OFF": _series_or_blank(df, "blockOffTime"),
             "ATD": _series_or_blank(df, "atd"),
             "ETD": _series_or_blank(df, "etd"),
             "STD": _series_or_blank(df, "schTime"),
@@ -63,7 +65,7 @@ def departures_from_ubikais(records: list[dict[str, Any]]) -> pd.DataFrame:
 def arrivals_from_ubikais(records: list[dict[str, Any]]) -> pd.DataFrame:
     df = pd.DataFrame(records)
     if df.empty:
-        return pd.DataFrame(columns=["FLT", "ORG", "REG", "TYP", "SPOT", "ATA", "ETA", "STA"])
+        return pd.DataFrame(columns=["FLT", "ORG", "REG", "TYP", "SPOT", "BLOCK_ON", "ATA", "ETA", "STA"])
 
     return pd.DataFrame(
         {
@@ -72,6 +74,7 @@ def arrivals_from_ubikais(records: list[dict[str, Any]]) -> pd.DataFrame:
             "REG": _series_or_blank(df, "acId"),
             "TYP": _series_or_blank(df, "acType"),
             "SPOT": _series_or_blank(df, "standArr"),
+            "BLOCK_ON": _series_or_blank(df, "blockOnTime"),
             "ATA": _series_or_blank(df, "ata"),
             "ETA": _series_or_blank(df, "eta"),
             "STA": _series_or_blank(df, "sta"),
@@ -194,7 +197,7 @@ def build_timeline_figure(
 def _prepare_departures(dep_df: pd.DataFrame, config: TimelineConfig) -> pd.DataFrame:
     dep_df = dep_df.copy()
     dep_df["source_index"] = dep_df.index
-    dep_df["TIME_RAW"] = dep_df.apply(_pick_time_dep, axis=1)
+    dep_df["TIME_RAW"] = dep_df.apply(lambda row: _pick_time_dep(row, config.time_basis), axis=1)
     dep_df = dep_df[pd.notna(dep_df["TIME_RAW"])].reset_index(drop=True)
 
     dep_df["time_dt"] = dep_df["TIME_RAW"].apply(
@@ -234,7 +237,7 @@ def _prepare_departures(dep_df: pd.DataFrame, config: TimelineConfig) -> pd.Data
 def _prepare_arrivals(arr_df: pd.DataFrame, config: TimelineConfig) -> pd.DataFrame:
     arr_df = arr_df.copy()
     arr_df["source_index"] = arr_df.index
-    arr_df["TIME_RAW"] = arr_df.apply(_pick_time_arr, axis=1)
+    arr_df["TIME_RAW"] = arr_df.apply(lambda row: _pick_time_arr(row, config.time_basis), axis=1)
     arr_df = arr_df[pd.notna(arr_df["TIME_RAW"])].reset_index(drop=True)
 
     arr_df["time_dt"] = arr_df["TIME_RAW"].apply(
@@ -613,16 +616,18 @@ def label_for(
     return " / ".join(parts)
 
 
-def _pick_time_dep(row: pd.Series):
-    for key in ("ATD", "ETD", "STD"):
+def _pick_time_dep(row: pd.Series, time_basis: str = "ground"):
+    keys = ("BLOCK_OFF", "ATD", "ETD", "STD") if str(time_basis).strip().lower() == "ground" else ("ATD", "ETD", "STD")
+    for key in keys:
         value = row.get(key, pd.NA)
         if pd.notna(value) and str(value).strip():
             return value
     return pd.NA
 
 
-def _pick_time_arr(row: pd.Series):
-    for key in ("ATA", "ETA", "STA"):
+def _pick_time_arr(row: pd.Series, time_basis: str = "ground"):
+    keys = ("BLOCK_ON", "ATA", "ETA", "STA") if str(time_basis).strip().lower() == "ground" else ("ATA", "ETA", "STA")
+    for key in keys:
         value = row.get(key, pd.NA)
         if pd.notna(value) and str(value).strip():
             return value

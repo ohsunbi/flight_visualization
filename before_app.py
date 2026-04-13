@@ -82,6 +82,7 @@ DEFAULT_LABEL_FLAGS = {
     "show_turnaround": False,
 }
 DEFAULT_TIMELINE_VALUES = {
+    "time_basis": "ground",
     "service_start_hour": 0,
     "interval_min": 30,
     "dep_before": 50,
@@ -314,6 +315,9 @@ def _read_url_state(params: dict[str, str]) -> dict:
         "airlines": airlines,
         "exclude_types": exclude_types,
         "labels": label_flags,
+        "time_basis": str(params.get("time_basis", DEFAULT_TIMELINE_VALUES["time_basis"])).strip().lower()
+        if str(params.get("time_basis", DEFAULT_TIMELINE_VALUES["time_basis"])).strip().lower() in {"ground", "flight"}
+        else DEFAULT_TIMELINE_VALUES["time_basis"],
         "service_start_hour": _coerce_int_param(
             params.get("service_start"),
             default=DEFAULT_TIMELINE_VALUES["service_start_hour"],
@@ -395,6 +399,7 @@ def _build_url_params(
     show_reg: bool,
     show_spot: bool,
     show_turnaround: bool,
+    time_basis: str,
     service_start_hour: int,
     interval_min: int,
     dep_before: int,
@@ -427,6 +432,9 @@ def _build_url_params(
         selected_label_keys = [query_key for query_key, state_key in LABEL_QUERY_KEYS if current_labels[state_key]]
         params["labels"] = ",".join(selected_label_keys) if selected_label_keys else "none"
 
+    normalized_time_basis = str(time_basis).strip().lower()
+    if normalized_time_basis != DEFAULT_TIMELINE_VALUES["time_basis"]:
+        params["time_basis"] = normalized_time_basis
     if int(service_start_hour) != DEFAULT_TIMELINE_VALUES["service_start_hour"]:
         params["service_start"] = str(int(service_start_hour))
     if int(interval_min) != DEFAULT_TIMELINE_VALUES["interval_min"]:
@@ -620,8 +628,11 @@ def _normalize_hhmm(value) -> Optional[str]:
     return digits
 
 
-def _pick_service_day_time(record: dict, direction: str) -> Optional[str]:
-    keys = ("atd", "etd", "schTime") if direction == "dep" else ("ata", "eta", "sta")
+def _pick_service_day_time(record: dict, direction: str, time_basis: str) -> Optional[str]:
+    if direction == "dep":
+        keys = ("blockOffTime", "atd", "etd", "schTime") if str(time_basis).strip().lower() == "ground" else ("atd", "etd", "schTime")
+    else:
+        keys = ("blockOnTime", "ata", "eta", "sta") if str(time_basis).strip().lower() == "ground" else ("ata", "eta", "sta")
     for key in keys:
         hhmm = _normalize_hhmm(record.get(key))
         if hhmm is not None:
@@ -633,6 +644,7 @@ def _filter_service_day_records(
     records: list[dict],
     *,
     direction: str,
+    time_basis: str,
     service_start_hour: int,
     include_early_window: bool,
 ) -> list[dict]:
@@ -640,7 +652,7 @@ def _filter_service_day_records(
     filtered_records = []
 
     for record in records:
-        hhmm = _pick_service_day_time(record, direction)
+        hhmm = _pick_service_day_time(record, direction, time_basis)
         if hhmm is None:
             continue
 
@@ -658,11 +670,13 @@ def _merge_service_day_payload(
     direction: str,
     base_payload: dict,
     next_payload: Optional[dict],
+    time_basis: str,
     service_start_hour: int,
 ) -> dict:
     base_records = _filter_service_day_records(
         base_payload.get("records") or [],
         direction=direction,
+        time_basis=time_basis,
         service_start_hour=service_start_hour,
         include_early_window=False,
     )
@@ -672,6 +686,7 @@ def _merge_service_day_payload(
         next_records = _filter_service_day_records(
             next_payload.get("records") or [],
             direction=direction,
+            time_basis=time_basis,
             service_start_hour=service_start_hour,
             include_early_window=True,
         )
@@ -767,6 +782,12 @@ show_spot = st.sidebar.checkbox("SPOT", key="show_spot")
 show_turnaround = st.sidebar.checkbox("Turn-around", key="show_turnaround")
 
 st.sidebar.header("Timeline Settings")
+time_basis = st.sidebar.selectbox(
+    "Time basis",
+    options=["ground", "flight"],
+    format_func=lambda value: "Ground ops (Block Time)" if value == "ground" else "Flight ops (ATD/ATA)",
+    key="time_basis",
+)
 service_start_hour = st.sidebar.number_input(
     "Service day starts at (hour)",
     min_value=0,
@@ -827,12 +848,14 @@ with st.spinner("Loading flight data from ubikais..."):
             direction="dep",
             base_payload=dep_payload_base,
             next_payload=dep_payload_next,
+            time_basis=str(time_basis),
             service_start_hour=int(service_start_hour),
         )
         arr_payload = _merge_service_day_payload(
             direction="arr",
             base_payload=arr_payload_base,
             next_payload=arr_payload_next,
+            time_basis=str(time_basis),
             service_start_hour=int(service_start_hour),
         )
     except Exception as exc:
@@ -937,6 +960,7 @@ desired_url_params = _build_url_params(
     show_reg=show_reg,
     show_spot=show_spot,
     show_turnaround=show_turnaround,
+    time_basis=str(time_basis),
     service_start_hour=int(service_start_hour),
     interval_min=int(interval_min),
     dep_before=int(dep_before),
@@ -954,6 +978,7 @@ if desired_url_signature != current_url_signature:
 
 config = TimelineConfig(
     base_date=base_date,
+    time_basis=str(time_basis),
     service_start_hour=int(service_start_hour),
     interval_min=int(interval_min),
     dep_before=int(dep_before),
