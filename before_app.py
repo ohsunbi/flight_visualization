@@ -79,7 +79,7 @@ DEFAULT_LABEL_FLAGS = {
     "show_des_org": False,
     "show_reg": False,
     "show_spot": False,
-    "show_turnaround": False,
+    "show_turnaround": True,
 }
 DEFAULT_TIMELINE_VALUES = {
     "time_basis": "ground",

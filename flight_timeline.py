@@ -475,7 +475,7 @@ def _find_turnaround_pairs(
         reg = _normalize_turnaround_key(row.get("REG", ""))
         spot = _normalize_turnaround_key(row.get("SPOT", ""))
         marker = row.get("marker")
-        if not reg or not spot or pd.isna(marker):
+        if (not reg and not spot) or pd.isna(marker):
             continue
         dep_candidates.append((dep_index, reg, spot, marker))
 
@@ -488,20 +488,34 @@ def _find_turnaround_pairs(
         reg = _normalize_turnaround_key(arr_row.get("REG", ""))
         spot = _normalize_turnaround_key(arr_row.get("SPOT", ""))
         arr_marker = arr_row.get("marker")
-        if not reg or not spot or pd.isna(arr_marker):
+        if (not reg and not spot) or pd.isna(arr_marker):
             continue
 
         best_dep_index = None
         best_gap = None
+        best_match_score = -1
         for dep_index, dep_reg, dep_spot, dep_marker in dep_candidates:
             if dep_index in used_dep_indices:
                 continue
-            if dep_reg != reg or dep_spot != spot:
+
+            reg_match = bool(reg and dep_reg and dep_reg == reg)
+            spot_match = bool(spot and dep_spot and dep_spot == spot)
+            match_score = int(reg_match) + int(spot_match)
+            if match_score == 0:
                 continue
+
             gap = dep_marker - arr_marker
             if gap <= timedelta(0) or gap >= turnaround_limit:
                 continue
-            if best_gap is None or gap < best_gap:
+
+            if (
+                match_score > best_match_score
+                or (
+                    match_score == best_match_score
+                    and (best_gap is None or gap < best_gap)
+                )
+            ):
+                best_match_score = match_score
                 best_gap = gap
                 best_dep_index = dep_index
 
