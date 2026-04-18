@@ -781,6 +781,7 @@ show_reg = st.sidebar.checkbox("REG", key="show_reg")
 show_spot = st.sidebar.checkbox("SPOT", key="show_spot")
 show_turnaround = st.sidebar.checkbox("Turn-around", key="show_turnaround")
 
+st.sidebar.markdown("---")
 st.sidebar.header("Timeline Settings")
 time_basis = st.sidebar.selectbox(
     "Time basis",
@@ -797,6 +798,7 @@ service_start_hour = st.sidebar.number_input(
 )
 interval_min = st.sidebar.selectbox("Overlap interval (min)", options=[10, 20, 30], key="interval_min")
 
+st.sidebar.markdown("---")
 st.sidebar.subheader("Handling time (min)")
 dep_before = st.sidebar.number_input("Departure handling (before ATD)", 0, 240, step=5, key="dep_before")
 dep_after = st.sidebar.number_input("Departure handling (after ATD)", 0, 240, step=5, key="dep_after")
@@ -810,6 +812,7 @@ turnaround_limit_min = st.sidebar.number_input(
     step=5,
     key="turnaround_limit_min",
 )
+st.sidebar.caption("Maximum allowed time for a Turn-around connection from Arrival to the next Departure.")
 
 st.sidebar.markdown("---")
 departure_airport = st.sidebar.text_input("Departure airport", value="RKSI").strip().upper()
@@ -1071,6 +1074,49 @@ with content_main:
             )
         service_day_end = base_date + timedelta(days=1) if int(service_start_hour) > 0 else base_date
         service_day_end_time = f"{int(service_start_hour):02d}:00" if int(service_start_hour) > 0 else "24:00"
+        with st.expander("Help", expanded=False):
+            st.markdown(
+                """
+**기본 사용 방법**
+- Date에서 조회할 날짜를 선택합니다.
+- Airlines에서 보고 싶은 항공사를 고릅니다.
+- Aircraft type에서 포함하거나 제외할 기종을 고릅니다.
+- Filters 안에서 바꾼 값은 Apply를 눌러야 차트에 반영됩니다.
+- Refresh를 누르면 ubikais에서 최신 데이터를 다시 가져옵니다.
+
+**Labels on bars**
+- FLT: 항공편 번호를 표시합니다.
+- DES/ORG: Departure는 destination airport, Arrival는 origin airport를 표시합니다.
+- REG: 항공기 등록부호를 표시합니다.
+- SPOT: Spot 정보를 표시합니다.
+- Turn-around: 도착편과 다음 출발편의 연결 관계를 화살표로 표시합니다.
+
+**Time basis**
+- Ground ops (Block Time): blockOn / blockOff time을 우선으로 사용합니다.
+- Flight ops (ATD/ATA): ATA / ATD를 우선으로 사용합니다.
+
+**Service day starts at (hour)**
+- 이 값은 하루의 기준 시작 시각을 정합니다.
+- 예를 들어 0이면 00:00부터 24:00까지를 같은 날짜 차트로 봅니다.
+- 2이면 해당 날짜 02:00부터 다음날 01:59까지를 같은 service day로 봅니다.
+- 따라서 새벽 항공편을 전날 operation으로 포함해서 보고 싶을 때 사용합니다.
+
+**Handling time (min)**
+- Departure handling (before ATD), Departure handling (after ATD)는 Departure 막대 길이를 정합니다.
+- Arrival handling (before ATA), Arrival handling (after ATA)는 Arrival 막대 길이를 정합니다.
+- 이 값은 차트에서 handling time을 얼마나 길게 볼지 정하는 설정입니다.
+
+**Turn-around**
+- Turn-around는 Arrival 이후 일정 시간 안에 이어지는 Departure를 연결편으로 봅니다.
+- 기본적으로 REG 또는 SPOT 중 하나가 같고, Turn-around limit 안에 있으면 연결 후보가 됩니다.
+- 후보가 여러 개면 가장 가까운 다음 Departure 1개를 연결합니다.
+
+**URL 저장**
+- Airlines, Aircraft type, Labels on bars, Timeline Settings, Handling time, Turn-around limit 값은 URL에 반영됩니다.
+- 같은 URL을 다시 열면 해당 설정이 초기값으로 복원됩니다.
+- Date는 URL에 저장되지 않으며, 앱을 열 때 기준의 오늘 날짜로 시작합니다.
+                """
+            )
         with st.expander("More details"):
             st.caption(
                 f"Service day: {base_date.strftime('%Y-%m-%d')} {int(service_start_hour):02d}:00 "
