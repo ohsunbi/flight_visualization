@@ -1,10 +1,14 @@
 from __future__ import annotations
 
 import io
+import math
+import statistics
 from dataclasses import replace
 from datetime import date, datetime, timedelta, timezone
+from html import escape
 from typing import Optional
 
+import matplotlib.pyplot as plt
 import pandas as pd
 import streamlit as st
 
@@ -176,6 +180,65 @@ st.markdown(
         font-weight: 600;
         color: inherit;
     }
+    .flight-lookup-calendar-wrap {
+        overflow-x: auto;
+        margin-top: 0.75rem;
+    }
+    .flight-lookup-calendar {
+        display: grid;
+        grid-template-columns: repeat(7, minmax(132px, 1fr));
+        gap: 0.55rem;
+        min-width: 980px;
+    }
+    .flight-lookup-head {
+        text-align: center;
+        font-size: 0.78rem;
+        font-weight: 700;
+        letter-spacing: 0.02em;
+        text-transform: uppercase;
+        color: var(--text-color);
+        opacity: 0.82;
+        padding: 0.55rem 0.45rem;
+        background: var(--secondary-background-color);
+        border: 1px solid rgba(128, 128, 128, 0.22);
+        border-radius: 10px;
+    }
+    .flight-lookup-head.is-weekend {
+        color: #ff6b5a;
+    }
+    .flight-lookup-cell {
+        background: var(--secondary-background-color);
+        border: 1px solid rgba(128, 128, 128, 0.22);
+        border-radius: 12px;
+        padding: 0.7rem 0.72rem;
+        min-height: 108px;
+        color: var(--text-color);
+    }
+    .flight-lookup-cell.is-empty {
+        background: transparent;
+        border-style: dashed;
+        opacity: 0.35;
+    }
+    .flight-lookup-cell.is-noop {
+        opacity: 0.72;
+    }
+    .flight-lookup-date {
+        font-size: 0.82rem;
+        font-weight: 700;
+        margin-bottom: 0.45rem;
+    }
+    .flight-lookup-line {
+        font-size: 0.84rem;
+        line-height: 1.35;
+        font-family: Consolas, "SFMono-Regular", Menlo, Monaco, monospace;
+    }
+    .flight-lookup-time {
+        font-weight: 700;
+    }
+    .flight-lookup-status {
+        font-size: 0.82rem;
+        opacity: 0.76;
+    }
     div.st-key-airline_filter_mobile {
         display: none;
     }
@@ -246,6 +309,16 @@ if "_applied_type_url_signature" not in st.session_state:
     st.session_state["_applied_type_url_signature"] = None
 if "_url_excluded_types" not in st.session_state:
     st.session_state["_url_excluded_types"] = []
+if "flight_lookup_code" not in st.session_state:
+    st.session_state.flight_lookup_code = ""
+if "flight_lookup_start_date" not in st.session_state:
+    st.session_state.flight_lookup_start_date = st.session_state.base_date
+if "flight_lookup_end_date" not in st.session_state:
+    st.session_state.flight_lookup_end_date = st.session_state.base_date
+if "flight_lookup_direction" not in st.session_state:
+    st.session_state.flight_lookup_direction = None
+if "flight_lookup_result" not in st.session_state:
+    st.session_state.flight_lookup_result = None
 for state_key, default_value in DEFAULT_LABEL_FLAGS.items():
     if state_key not in st.session_state:
         st.session_state[state_key] = default_value
@@ -640,6 +713,340 @@ def _pick_service_day_time(record: dict, direction: str, time_basis: str) -> Opt
     return None
 
 
+def _compact_hhmm(value: object) -> str:
+    if value is None or pd.isna(value):
+        return ""
+
+    text = str(value).strip()
+    if not text or text.upper() in {"NAN", "NONE", "NULL"}:
+        return ""
+
+    digits = "".join(char for char in text if char.isdigit())
+    if not digits:
+        return ""
+    if len(digits) >= 4:
+        return digits[-4:]
+    return digits.zfill(4)
+
+
+def _normalize_flight_lookup_code(value: str) -> tuple[Optional[str], Optional[str], str]:
+    normalized = "".join(char for char in str(value).upper() if char.isalnum())
+    if len(normalized) < 4:
+        return None, None, normalized
+
+    airline_code = normalized[:3]
+    flight_number = normalized[3:]
+    if not airline_code.isalpha() or not flight_number:
+        return None, None, normalized
+    return airline_code, flight_number, normalized
+
+
+def _lookup_result_for_date(
+    *,
+    flight_date: date,
+    direction: str,
+    airline_code: str,
+    flight_number: str,
+    full_code: str,
+    departure_airport: str,
+    arrival_airport: str,
+    time_basis: str,
+) -> dict:
+    query = UbikaisQuery(
+        flight_date=flight_date,
+        airline=airline_code,
+        departure_airport=departure_airport,
+        arrival_airport=arrival_airport,
+        flight_number=flight_number,
+    )
+    payload = fetch_records(direction, query, refresh=False)
+
+    matching_records = [
+        record
+        for record in (payload.get("records") or [])
+        if str(record.get("fpId", "")).strip().upper() == full_code
+    ]
+
+    if matching_records:
+        if direction == "dep":
+            matching_records.sort(
+                key=lambda record: (
+                    _compact_hhmm(record.get("schTime")) or "9999",
+                    _compact_hhmm(record.get("etd")) or "9999",
+                    _compact_hhmm(record.get("atd")) or "9999",
+                )
+            )
+        else:
+            matching_records.sort(
+                key=lambda record: (
+                    _compact_hhmm(record.get("sta")) or "9999",
+                    _compact_hhmm(record.get("eta")) or "9999",
+                    _compact_hhmm(record.get("ata")) or "9999",
+                )
+            )
+
+    record = matching_records[0] if matching_records else None
+    if direction == "dep":
+        scheduled_label = "STD"
+        scheduled_time = _compact_hhmm(record.get("schTime")) if record else ""
+        actual_label = "BLOCK" if time_basis == "ground" else "ATD"
+        actual_time = _compact_hhmm(record.get("blockOffTime")) if (record and time_basis == "ground") else (
+            _compact_hhmm(record.get("atd")) if record else ""
+        )
+    else:
+        scheduled_label = "STA"
+        scheduled_time = _compact_hhmm(record.get("sta")) if record else ""
+        actual_label = "BLOCK" if time_basis == "ground" else "ATA"
+        actual_time = _compact_hhmm(record.get("blockOnTime")) if (record and time_basis == "ground") else (
+            _compact_hhmm(record.get("ata")) if record else ""
+        )
+
+    return {
+        "date": flight_date,
+        "operated": bool(record),
+        "scheduled_label": scheduled_label,
+        "scheduled_time": scheduled_time,
+        "actual_label": actual_label,
+        "actual_time": actual_time,
+        "record": record,
+    }
+
+
+def _render_flight_lookup_calendar(entries: list[dict]) -> str:
+    if not entries:
+        return ""
+
+    weekday_labels = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"]
+    entry_map = {entry["date"]: entry for entry in entries}
+    start_date = entries[0]["date"]
+    end_date = entries[-1]["date"]
+
+    calendar_start = start_date - timedelta(days=(start_date.weekday() + 1) % 7)
+    calendar_end = end_date + timedelta(days=(5 - end_date.weekday()) % 7)
+
+    parts = ['<div class="flight-lookup-calendar-wrap"><div class="flight-lookup-calendar">']
+    time_values = sorted(
+        {
+            entry.get("scheduled_time")
+            for entry in entries
+            if entry.get("scheduled_time")
+        }
+    )
+    palette = [
+        "#3b82f6",
+        "#f59e0b",
+        "#ec4899",
+        "#22c55e",
+        "#8b5cf6",
+        "#06b6d4",
+        "#ef4444",
+        "#84cc16",
+        "#fb7185",
+        "#a78bfa",
+    ]
+    time_color_map = {
+        time_value: palette[index % len(palette)]
+        for index, time_value in enumerate(time_values)
+    }
+
+    for weekday_label in weekday_labels:
+        weekend_class = " is-weekend" if weekday_label in {"Sun", "Sat"} else ""
+        parts.append(f'<div class="flight-lookup-head{weekend_class}">{escape(weekday_label)}</div>')
+
+    current = calendar_start
+    while current <= calendar_end:
+        if current < start_date or current > end_date:
+            parts.append('<div class="flight-lookup-cell is-empty"></div>')
+        else:
+            entry = entry_map[current]
+            date_label = current.strftime("%m/%d")
+            if entry["operated"]:
+                scheduled_time = entry["scheduled_time"] or "----"
+                actual_time = entry["actual_time"] or "----"
+                scheduled_color = time_color_map.get(entry["scheduled_time"], "var(--text-color)")
+                parts.append(
+                    f'<div class="flight-lookup-cell">'
+                    f'<div class="flight-lookup-date">{escape(date_label)}</div>'
+                    f'<div class="flight-lookup-line">{escape(entry["scheduled_label"])} '
+                    f'<span class="flight-lookup-time" style="color:{escape(scheduled_color)};">{escape(scheduled_time)}</span>'
+                    f'</div>'
+                    f'<div class="flight-lookup-line">{escape(entry["actual_label"])} '
+                    f'<span class="flight-lookup-time">{escape(actual_time)}</span>'
+                    f'</div>'
+                    f'</div>'
+                )
+            else:
+                parts.append(
+                    f'<div class="flight-lookup-cell is-noop">'
+                    f'<div class="flight-lookup-date">{escape(date_label)}</div>'
+                    f'<div class="flight-lookup-status">No operation</div>'
+                    f'</div>'
+                )
+        current += timedelta(days=1)
+
+    parts.append("</div></div>")
+    return "".join(parts)
+
+
+def _hhmm_to_minutes(value: object) -> Optional[int]:
+    hhmm = _compact_hhmm(value)
+    if not hhmm:
+        return None
+    hours = int(hhmm[:2])
+    minutes = int(hhmm[2:])
+    if not (0 <= hours <= 23 and 0 <= minutes <= 59):
+        return None
+    return hours * 60 + minutes
+
+
+def _minutes_to_hhmm(total_minutes: float | int) -> str:
+    normalized_minutes = int(round(float(total_minutes))) % (24 * 60)
+    hours, minutes = divmod(normalized_minutes, 60)
+    return f"{hours:02d}{minutes:02d}"
+
+
+def _unwrap_minutes(minutes: list[int]) -> tuple[list[int], int]:
+    if not minutes:
+        return [], 0
+
+    ordered = sorted(minutes)
+    if len(ordered) == 1:
+        return ordered, ordered[0]
+
+    gap_candidates = []
+    for index, current_minute in enumerate(ordered):
+        next_minute = ordered[(index + 1) % len(ordered)]
+        if index == len(ordered) - 1:
+            next_minute += 24 * 60
+        gap_candidates.append((next_minute - current_minute, index))
+
+    _, gap_index = max(gap_candidates)
+    start_minute = ordered[(gap_index + 1) % len(ordered)]
+    shifted = [minute if minute >= start_minute else minute + 24 * 60 for minute in minutes]
+    return shifted, start_minute
+
+
+def _circular_mean_minutes(minutes: list[int]) -> Optional[float]:
+    if not minutes:
+        return None
+
+    angles = [(2 * math.pi * minute) / (24 * 60) for minute in minutes]
+    sin_total = sum(math.sin(angle) for angle in angles)
+    cos_total = sum(math.cos(angle) for angle in angles)
+    if math.isclose(sin_total, 0.0, abs_tol=1e-9) and math.isclose(cos_total, 0.0, abs_tol=1e-9):
+        return float(sum(minutes) / len(minutes))
+
+    mean_angle = math.atan2(sin_total, cos_total)
+    if mean_angle < 0:
+        mean_angle += 2 * math.pi
+    return (mean_angle * (24 * 60)) / (2 * math.pi)
+
+
+def _nearest_wrapped_value(value: float, center: float) -> float:
+    candidates = [value - 24 * 60, value, value + 24 * 60]
+    return min(candidates, key=lambda candidate: abs(candidate - center))
+
+
+def _tick_step_for_span(span_minutes: float) -> int:
+    if span_minutes <= 120:
+        return 10
+    if span_minutes <= 360:
+        return 30
+    return 60
+
+
+def _build_flight_lookup_distribution_chart(
+    entries: list[dict],
+    *,
+    direction: str,
+    time_basis: str,
+) -> tuple[Optional[plt.Figure], int, int, Optional[str], Optional[str], Optional[str]]:
+    operated_entries = [entry for entry in entries if entry["operated"]]
+    actual_minutes = []
+    for entry in operated_entries:
+        minute_value = _hhmm_to_minutes(entry.get("actual_time"))
+        if minute_value is not None:
+            actual_minutes.append(minute_value)
+
+    available_count = len(actual_minutes)
+    operated_count = len(operated_entries)
+
+    if direction == "dep":
+        actual_label = "Block off" if time_basis == "ground" else "ATD"
+    else:
+        actual_label = "Block on" if time_basis == "ground" else "ATA"
+
+    if not actual_minutes:
+        return None, available_count, operated_count, actual_label, None, None
+
+    shifted_minutes, start_minute = _unwrap_minutes(actual_minutes)
+    min_minute = min(shifted_minutes)
+    max_minute = max(shifted_minutes)
+    span_minutes = max_minute - min_minute
+    tick_step = _tick_step_for_span(span_minutes)
+    padding = 30
+
+    if span_minutes < 60:
+        center_minute = (min_minute + max_minute) / 2
+        min_minute = center_minute - 30
+        max_minute = center_minute + 30
+    else:
+        min_minute -= padding
+        max_minute += padding
+
+    min_minute = math.floor(min_minute / tick_step) * tick_step
+    max_minute = math.ceil(max_minute / tick_step) * tick_step
+
+    plot_points = []
+    bucket_levels: dict[int, int] = {}
+    for shifted_minute in sorted(shifted_minutes):
+        bucket = int(round(shifted_minute / 5))
+        level = bucket_levels.get(bucket, 0)
+        bucket_levels[bucket] = level + 1
+        plot_points.append((shifted_minute, 0.16 + level * 0.14))
+
+    max_y = max(y_value for _, y_value in plot_points) if plot_points else 0.2
+    fig, ax = plt.subplots(figsize=(10, 2.4))
+    fig.patch.set_alpha(0)
+    ax.set_facecolor("none")
+
+    x_values = [x_value for x_value, _ in plot_points]
+    y_values = [y_value for _, y_value in plot_points]
+    ax.scatter(
+        x_values,
+        y_values,
+        s=54,
+        color="#ff6b5a",
+        edgecolors="#ffffff",
+        linewidths=0.7,
+        alpha=0.95,
+        zorder=3,
+    )
+
+    mean_minute = _circular_mean_minutes(actual_minutes)
+    mean_label = _minutes_to_hhmm(mean_minute) if mean_minute is not None else None
+    median_label = _minutes_to_hhmm(statistics.median(shifted_minutes))
+    if mean_minute is not None:
+        center_reference = (min_minute + max_minute) / 2
+        mean_x = _nearest_wrapped_value(mean_minute if mean_minute >= start_minute else mean_minute + 24 * 60, center_reference)
+        ax.axvline(mean_x, color="#ffd166", linewidth=1.6, linestyle="--", zorder=2)
+
+    ticks = list(range(int(min_minute), int(max_minute) + tick_step, tick_step))
+    ax.set_xlim(min_minute, max_minute)
+    ax.set_xticks(ticks)
+    ax.set_xticklabels([_minutes_to_hhmm(tick) for tick in ticks], fontsize=9, color="#d1d5db")
+    ax.grid(axis="x", color="#475569", alpha=0.35, linewidth=0.8)
+    ax.tick_params(axis="x", length=0)
+    ax.set_ylim(0, max_y + 0.18)
+    ax.set_yticks([])
+    for spine in ("left", "right", "top"):
+        ax.spines[spine].set_visible(False)
+    ax.spines["bottom"].set_color("#475569")
+    ax.spines["bottom"].set_alpha(0.55)
+
+    return fig, available_count, operated_count, actual_label, mean_label, median_label
+
+
 def _filter_service_day_records(
     records: list[dict],
     *,
@@ -715,6 +1122,9 @@ current_url_signature = _url_signature(current_url_params)
 if st.session_state["_applied_url_signature"] != current_url_signature:
     _apply_url_state(current_url_params)
     st.session_state["_applied_url_signature"] = current_url_signature
+
+if "flight_lookup_time_basis" not in st.session_state or st.session_state.flight_lookup_time_basis not in {"ground", "flight"}:
+    st.session_state.flight_lookup_time_basis = st.session_state.time_basis
 
 st.sidebar.date_input("Date", key="base_date", label_visibility="collapsed")
 date_nav_col1, date_nav_col2 = st.sidebar.columns(2, gap="small")
@@ -1135,3 +1545,179 @@ with content_main:
             with preview_col2:
                 st.subheader("Arrivals")
                 st.dataframe(arr_df)
+        with st.expander("Flight schedule lookup"):
+            with st.form("flight_lookup_form", border=False, enter_to_submit=False):
+                lookup_col1, lookup_col2 = st.columns(2, gap="small")
+                with lookup_col1:
+                    st.text_input("Flight", key="flight_lookup_code", placeholder="ex) ESR605")
+                with lookup_col2:
+                    st.selectbox(
+                        "Flight type",
+                        options=["dep", "arr"],
+                        format_func=lambda value: "Departure" if value == "dep" else "Arrival",
+                        index=None,
+                        placeholder="Select flight type",
+                        key="flight_lookup_direction",
+                    )
+
+                lookup_date_col1, lookup_date_col2 = st.columns(2, gap="small")
+                with lookup_date_col1:
+                    st.date_input("Start date", key="flight_lookup_start_date")
+                with lookup_date_col2:
+                    st.date_input("End date", key="flight_lookup_end_date")
+
+                st.selectbox(
+                    "Time basis",
+                    options=["ground", "flight"],
+                    format_func=lambda value: "Ground ops (Block Time)" if value == "ground" else "Flight ops (ATD/ATA)",
+                    key="flight_lookup_time_basis",
+                )
+
+                st.markdown("<div style='height:0.35rem;'></div>", unsafe_allow_html=True)
+                search_lookup = st.form_submit_button("Search", type="primary", width="stretch")
+                st.markdown("<div style='height:0.45rem;'></div>", unsafe_allow_html=True)
+
+            if search_lookup:
+                st.session_state.flight_lookup_result = None
+
+                lookup_start = st.session_state.flight_lookup_start_date
+                lookup_end = st.session_state.flight_lookup_end_date
+                if isinstance(lookup_start, datetime):
+                    lookup_start = lookup_start.date()
+                if isinstance(lookup_end, datetime):
+                    lookup_end = lookup_end.date()
+
+                airline_code, flight_number, normalized_flight = _normalize_flight_lookup_code(
+                    st.session_state.flight_lookup_code
+                )
+
+                if not airline_code or not flight_number:
+                    st.warning("Enter a full flight code like ESR605.")
+                elif st.session_state.flight_lookup_direction not in {"dep", "arr"}:
+                    st.warning("Select a flight type.")
+                elif lookup_end < lookup_start:
+                    st.warning("End date must be the same as or later than Start date.")
+                elif (lookup_end - lookup_start).days > 30:
+                    st.warning("Flight lookup range can be up to 31 days.")
+                else:
+                    with st.spinner("Searching flight history..."):
+                        try:
+                            entries = []
+                            current_date = lookup_start
+                            while current_date <= lookup_end:
+                                entries.append(
+                                    _lookup_result_for_date(
+                                        flight_date=current_date,
+                                        direction=st.session_state.flight_lookup_direction,
+                                        airline_code=airline_code,
+                                        flight_number=flight_number,
+                                        full_code=normalized_flight,
+                                        departure_airport=query.departure_airport,
+                                        arrival_airport=query.arrival_airport,
+                                        time_basis=str(st.session_state.flight_lookup_time_basis),
+                                    )
+                                )
+                                current_date += timedelta(days=1)
+
+                            operated_days = sum(1 for entry in entries if entry["operated"])
+                            st.session_state.flight_lookup_result = {
+                                "flight_code": normalized_flight,
+                                "direction": st.session_state.flight_lookup_direction,
+                                "start_date": lookup_start,
+                                "end_date": lookup_end,
+                                "entries": entries,
+                                "operated_days": operated_days,
+                                "not_operated_days": len(entries) - operated_days,
+                                "time_basis": str(st.session_state.flight_lookup_time_basis),
+                            }
+                        except Exception as exc:
+                            st.error(f"Flight lookup failed: {exc}")
+
+            lookup_result = st.session_state.get("flight_lookup_result")
+            if lookup_result:
+                lookup_direction_label = "Departure" if lookup_result["direction"] == "dep" else "Arrival"
+                summary_col1, summary_col2, summary_col3, summary_col4 = st.columns(4, gap="small")
+                with summary_col1:
+                    st.metric("Flight", lookup_result["flight_code"])
+                with summary_col2:
+                    st.metric("Flight type", lookup_direction_label)
+                with summary_col3:
+                    st.metric("Operated days", lookup_result["operated_days"])
+                with summary_col4:
+                    st.metric("No-op days", lookup_result["not_operated_days"])
+
+                st.caption(
+                    f"Period: {lookup_result['start_date'].strftime('%Y-%m-%d')} ~ "
+                    f"{lookup_result['end_date'].strftime('%Y-%m-%d')}"
+                )
+                st.markdown(
+                    _render_flight_lookup_calendar(lookup_result["entries"]),
+                    unsafe_allow_html=True,
+                )
+
+                chart_fig, available_count, operated_count, actual_label, mean_label, median_label = _build_flight_lookup_distribution_chart(
+                    lookup_result["entries"],
+                    direction=lookup_result["direction"],
+                    time_basis=lookup_result["time_basis"],
+                )
+                st.markdown("<div style='height:0.9rem;'></div>", unsafe_allow_html=True)
+                st.markdown("**Actual time distribution**")
+                availability_html = (
+                    "<div style='display:flex; align-items:center; gap:0.7rem; flex-wrap:wrap; "
+                    "margin:0.15rem 0 0.35rem 0;'>"
+                    f"<span style='color:#9ca3af; font-size:0.95rem;'>Available: {available_count} / {operated_count} operated</span>"
+                )
+                if mean_label:
+                    availability_html += (
+                        f"<span style='color:#ffd166; font-size:0.98rem; font-weight:700;'>AVG {escape(mean_label)}</span>"
+                    )
+                if median_label:
+                    availability_html += (
+                        f"<span style='color:#8bd3ff; font-size:0.98rem; font-weight:700;'>MED {escape(median_label)}</span>"
+                    )
+                availability_html += "</div>"
+                st.markdown(availability_html, unsafe_allow_html=True)
+                if chart_fig is not None:
+                    st.pyplot(chart_fig, width="stretch")
+                    plt.close(chart_fig)
+                elif operated_count:
+                    st.info(f"No {actual_label} values are available in the selected period.")
+
+                operated_entries = [entry for entry in lookup_result["entries"] if entry["operated"]]
+                if operated_entries:
+                    detail_rows = []
+                    for entry in operated_entries:
+                        record = entry["record"] or {}
+                        if lookup_result["direction"] == "dep":
+                            detail_rows.append(
+                                {
+                                    "Date": entry["date"].strftime("%Y-%m-%d"),
+                                    "Day": entry["date"].strftime("%a").upper(),
+                                    "Flight": lookup_result["flight_code"],
+                                    "STD": _compact_hhmm(record.get("schTime")),
+                                    "ETD": _compact_hhmm(record.get("etd")),
+                                    "ATD": _compact_hhmm(record.get("atd")),
+                                    "Block off": _compact_hhmm(record.get("blockOffTime")),
+                                    "REG": str(record.get("acId", "")).strip(),
+                                    "SPOT": str(record.get("standDep", "")).strip(),
+                                }
+                            )
+                        else:
+                            detail_rows.append(
+                                {
+                                    "Date": entry["date"].strftime("%Y-%m-%d"),
+                                    "Day": entry["date"].strftime("%a").upper(),
+                                    "Flight": lookup_result["flight_code"],
+                                    "STA": _compact_hhmm(record.get("sta")),
+                                    "ETA": _compact_hhmm(record.get("eta")),
+                                    "ATA": _compact_hhmm(record.get("ata")),
+                                    "Block on": _compact_hhmm(record.get("blockOnTime")),
+                                    "REG": str(record.get("acId", "")).strip(),
+                                    "SPOT": str(record.get("standArr", "")).strip(),
+                                }
+                            )
+
+                    st.markdown("<div style='height:0.85rem;'></div>", unsafe_allow_html=True)
+                    st.dataframe(pd.DataFrame(detail_rows), width="stretch", hide_index=True)
+                else:
+                    st.info("No operation found in the selected period.")
