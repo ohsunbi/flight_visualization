@@ -118,8 +118,26 @@ def build_timeline_figure(
         for t in overlap_times
     ]
 
+    turnaround_pairs = (
+        _find_turnaround_pairs(
+            dep_plot,
+            arr_plot,
+            timedelta(minutes=int(config.turnaround_limit_min)),
+        )
+        if config.show_turnaround
+        else []
+    )
+
     dep_block = dep_plot[["source_index", "Label", "start", "end", "marker", "type", "time_str"]].sort_values("start").reset_index(drop=True)
     arr_block = arr_plot[["source_index", "Label", "start", "end", "marker", "type", "time_str"]].sort_values("start").reset_index(drop=True)
+    if turnaround_pairs:
+        dep_block, arr_block = _reorder_blocks_for_turnaround(
+            dep_plot=dep_plot,
+            arr_plot=arr_plot,
+            dep_block=dep_block,
+            arr_block=arr_block,
+            turnaround_pairs=turnaround_pairs,
+        )
 
     total_dep = len(dep_block)
     total_arr = len(arr_block)
@@ -173,7 +191,7 @@ def build_timeline_figure(
             arr_plot=arr_plot,
             dep_block=dep_wrapped,
             arr_block=arr_wrapped,
-            turnaround_limit=timedelta(minutes=int(config.turnaround_limit_min)),
+            turnaround_pairs=turnaround_pairs,
         )
     _plot_overlap_numbers(
         ax,
@@ -304,14 +322,17 @@ def _plot_wrapped_timeline(
 
     dep_labeled = False
     for _, row in dep_block.iterrows():
-        y_pos = row["wrap_row"]
+        y_pos = _dep_display_y(row)
+        is_paired_slot = bool(row.get("paired_slot", False))
+        dep_label_y = y_pos - 0.05 if is_paired_slot else y_pos
+        dep_time_y = y_pos - 0.11 if is_paired_slot else y_pos + 0.15
         legend_label = "Departure" if not dep_labeled else ""
         dep_labeled = True
         ax.plot([row["start"], row["end"]], [y_pos, y_pos], color=COL_DEP, linewidth=4, label=legend_label, zorder=2)
         if row["Label"]:
             ax.text(
                 row["end"] + timedelta(minutes=5),
-                y_pos,
+                dep_label_y,
                 row["Label"],
                 va="center",
                 fontsize=7,
@@ -321,24 +342,26 @@ def _plot_wrapped_timeline(
         ax.scatter(row["marker"], y_pos, color=COL_DEP, s=28, marker="o", zorder=3)
         ax.text(
             row["marker"] - timedelta(minutes=3),
-            y_pos + 0.15,
+            dep_time_y,
             row["time_str"],
             ha="right",
-            va="bottom",
+            va="top" if is_paired_slot else "bottom",
             fontsize=7,
             color=COL_DEP,
         )
 
     arr_labeled = False
     for _, row in arr_block.iterrows():
-        row_y = row["wrap_row"] + 0.55
+        row_y = _arr_display_y(row)
+        arr_label_y = row_y + 0.05 if bool(row.get("paired_slot", False)) else row_y
+        arr_time_y = row_y + (0.11 if bool(row.get("paired_slot", False)) else 0.15)
         legend_label = "Arrival" if not arr_labeled else ""
         arr_labeled = True
         ax.plot([row["start"], row["end"]], [row_y, row_y], color=COL_ARR, linewidth=4, label=legend_label, zorder=2)
         if row["Label"]:
             ax.text(
                 row["end"] + timedelta(minutes=5),
-                row_y,
+                arr_label_y,
                 row["Label"],
                 va="center",
                 fontsize=7,
@@ -348,7 +371,7 @@ def _plot_wrapped_timeline(
         ax.scatter(row["marker"], row_y, color=COL_ARR, s=28, marker="s", zorder=3)
         ax.text(
             row["marker"] - timedelta(minutes=3),
-            row_y + 0.15,
+            arr_time_y,
             row["time_str"],
             ha="right",
             va="bottom",
@@ -405,9 +428,169 @@ def _assign_wrap_rows(block: pd.DataFrame, rows_per_panel: int) -> pd.DataFrame:
         return block.assign(wrap_panel=pd.Series(dtype=int), wrap_row=pd.Series(dtype=float))
 
     wrapped = block.copy()
-    wrapped["wrap_panel"] = wrapped.index // rows_per_panel
-    wrapped["wrap_row"] = wrapped.index % rows_per_panel
+    row_source = (
+        wrapped["slot_row"].astype(int)
+        if "slot_row" in wrapped.columns
+        else pd.Series(wrapped.index, index=wrapped.index, dtype=int)
+    )
+    wrapped["wrap_panel"] = row_source // rows_per_panel
+    wrapped["wrap_row"] = row_source % rows_per_panel
     return wrapped
+
+
+def _reorder_blocks_for_turnaround(
+    *,
+    dep_plot: pd.DataFrame,
+    arr_plot: pd.DataFrame,
+    dep_block: pd.DataFrame,
+    arr_block: pd.DataFrame,
+    turnaround_pairs: list[tuple[int, int]],
+) -> tuple[pd.DataFrame, pd.DataFrame]:
+    if not turnaround_pairs or dep_block.empty or arr_block.empty:
+        return dep_block, arr_block
+
+    dep_lookup = dep_plot[["source_index", "marker", "start"]].copy()
+    dep_lookup["source_index"] = dep_lookup["source_index"].astype(int)
+    dep_lookup = dep_lookup.set_index("source_index")
+
+    arr_lookup = arr_plot[["source_index", "marker", "start"]].copy()
+    arr_lookup["source_index"] = arr_lookup["source_index"].astype(int)
+    arr_lookup = arr_lookup.set_index("source_index")
+
+    dep_sources = dep_block["source_index"].dropna().astype(int).tolist()
+    arr_sources = arr_block["source_index"].dropna().astype(int).tolist()
+    dep_rank_lookup = {source: rank for rank, source in enumerate(dep_sources)}
+    arr_rank_lookup = {source: rank for rank, source in enumerate(arr_sources)}
+
+    matched_dep_sources: set[int] = set()
+    matched_arr_sources: set[int] = set()
+    slots: list[dict[str, Any]] = []
+
+    for arr_index, dep_index in turnaround_pairs:
+        arr_source = int(arr_plot.iloc[arr_index]["source_index"])
+        dep_source = int(dep_plot.iloc[dep_index]["source_index"])
+        if arr_source not in arr_lookup.index or dep_source not in dep_lookup.index:
+            continue
+
+        arr_marker = arr_lookup.loc[arr_source, "marker"]
+        dep_marker = dep_lookup.loc[dep_source, "marker"]
+        anchor = arr_marker + (dep_marker - arr_marker) / 2
+        slots.append(
+            {
+                "anchor": anchor,
+                "arr_source": arr_source,
+                "dep_source": dep_source,
+                "paired": True,
+                "preferred_row": int(round((dep_rank_lookup.get(dep_source, 0) + arr_rank_lookup.get(arr_source, 0)) / 2)),
+            }
+        )
+        matched_arr_sources.add(arr_source)
+        matched_dep_sources.add(dep_source)
+
+    for arr_source in arr_sources:
+        if arr_source in matched_arr_sources or arr_source not in arr_lookup.index:
+            continue
+        slots.append(
+            {
+                "anchor": arr_lookup.loc[arr_source, "marker"],
+                "arr_source": arr_source,
+                "dep_source": None,
+                "paired": False,
+                "preferred_row": arr_rank_lookup.get(arr_source, 0),
+            }
+        )
+
+    for dep_source in dep_sources:
+        if dep_source in matched_dep_sources or dep_source not in dep_lookup.index:
+            continue
+        slots.append(
+            {
+                "anchor": dep_lookup.loc[dep_source, "marker"],
+                "arr_source": None,
+                "dep_source": dep_source,
+                "paired": False,
+                "preferred_row": dep_rank_lookup.get(dep_source, 0),
+            }
+        )
+
+    slots.sort(
+        key=lambda slot: (
+            slot["anchor"],
+            0 if slot["arr_source"] is not None and slot["dep_source"] is not None else 1,
+            0 if slot["arr_source"] is not None else 1,
+        )
+    )
+
+    row_count = max(len(dep_sources), len(arr_sources), 1)
+    row_dep_used = [False] * row_count
+    row_arr_used = [False] * row_count
+    dep_order_lookup: dict[int, int] = {}
+    arr_order_lookup: dict[int, int] = {}
+    dep_pair_lookup: dict[int, bool] = {}
+    arr_pair_lookup: dict[int, bool] = {}
+
+    def _assign_slot(slot: dict[str, Any]) -> None:
+        required_dep = slot["dep_source"] is not None
+        required_arr = slot["arr_source"] is not None
+        preferred_row = int(slot.get("preferred_row", 0))
+
+        candidate_rows = []
+        for candidate_row in range(row_count):
+            if required_dep and row_dep_used[candidate_row]:
+                continue
+            if required_arr and row_arr_used[candidate_row]:
+                continue
+            candidate_rows.append(candidate_row)
+
+        if not candidate_rows:
+            return
+
+        selected_row = min(candidate_rows, key=lambda candidate_row: (abs(candidate_row - preferred_row), candidate_row))
+        if bool(slot["paired"]):
+            row_dep_used[selected_row] = True
+            row_arr_used[selected_row] = True
+
+        if required_dep:
+            dep_source = int(slot["dep_source"])
+            if not bool(slot["paired"]):
+                row_dep_used[selected_row] = True
+            dep_order_lookup[dep_source] = selected_row
+            dep_pair_lookup[dep_source] = bool(slot["paired"])
+        if required_arr:
+            arr_source = int(slot["arr_source"])
+            if not bool(slot["paired"]):
+                row_arr_used[selected_row] = True
+            arr_order_lookup[arr_source] = selected_row
+            arr_pair_lookup[arr_source] = bool(slot["paired"])
+
+    paired_slots = [slot for slot in slots if bool(slot.get("paired", False))]
+    unpaired_slots = [slot for slot in slots if not bool(slot.get("paired", False))]
+
+    for slot in paired_slots:
+        _assign_slot(slot)
+
+    for slot in unpaired_slots:
+        _assign_slot(slot)
+
+    dep_reordered = dep_block.copy()
+    dep_reordered["slot_row"] = dep_reordered["source_index"].apply(
+        lambda value: dep_order_lookup.get(int(value), 10**9) if pd.notna(value) else 10**9
+    )
+    dep_reordered["paired_slot"] = dep_reordered["source_index"].apply(
+        lambda value: dep_pair_lookup.get(int(value), False) if pd.notna(value) else False
+    )
+    dep_reordered = dep_reordered.sort_values(["slot_row", "start"]).reset_index(drop=True)
+
+    arr_reordered = arr_block.copy()
+    arr_reordered["slot_row"] = arr_reordered["source_index"].apply(
+        lambda value: arr_order_lookup.get(int(value), 10**9) if pd.notna(value) else 10**9
+    )
+    arr_reordered["paired_slot"] = arr_reordered["source_index"].apply(
+        lambda value: arr_pair_lookup.get(int(value), False) if pd.notna(value) else False
+    )
+    arr_reordered = arr_reordered.sort_values(["slot_row", "start"]).reset_index(drop=True)
+
+    return dep_reordered, arr_reordered
 
 
 def _build_overlap_display_times(start_time, end_time, interval_min: int) -> list[datetime]:
@@ -533,19 +716,18 @@ def _plot_turnaround_links(
     arr_plot: pd.DataFrame,
     dep_block: pd.DataFrame,
     arr_block: pd.DataFrame,
-    turnaround_limit: timedelta,
+    turnaround_pairs: list[tuple[int, int]],
 ) -> None:
-    turnaround_pairs = _find_turnaround_pairs(dep_plot, arr_plot, turnaround_limit)
     if not turnaround_pairs:
         return
 
     dep_y_lookup = {
-        int(row["source_index"]): float(row["wrap_row"])
+        int(row["source_index"]): _dep_display_y(row)
         for _, row in dep_block.iterrows()
         if pd.notna(row.get("source_index"))
     }
     arr_y_lookup = {
-        int(row["source_index"]): float(row["wrap_row"]) + 0.55
+        int(row["source_index"]): _arr_display_y(row)
         for _, row in arr_block.iterrows()
         if pd.notna(row.get("source_index"))
     }
@@ -574,6 +756,16 @@ def _plot_turnaround_links(
             },
             zorder=2.6,
         )
+
+
+def _dep_display_y(row: pd.Series) -> float:
+    base_row = float(row["wrap_row"])
+    return base_row + (0.14 if bool(row.get("paired_slot", False)) else 0.0)
+
+
+def _arr_display_y(row: pd.Series) -> float:
+    base_row = float(row["wrap_row"])
+    return base_row + (0.32 if bool(row.get("paired_slot", False)) else 0.55)
 
 
 
