@@ -1600,48 +1600,10 @@ with content_main:
         else:
             fetched_at_text = "-"
 
-        airline_tag = selected_airlines[0] if len(selected_airlines) == 1 else f"{selected_airlines[0]}_plus{len(selected_airlines) - 1}"
-        chart_name = (
-            f"{base_date.strftime('%Y-%m-%d')}_{airline_tag}_D{summary['total_dep']}_A{summary['total_arr']}.png"
-        )
-        buffer = io.BytesIO()
-        fig.savefig(buffer, format="png", dpi=200, bbox_inches="tight")
-        buffer.seek(0)
-
-        st.pyplot(fig, width="content")
-        st.markdown(
-            f"""
-            <div class="last-fetched-block">
-                <span class="last-fetched-label">Last fetched</span>
-                <span class="last-fetched-value">{fetched_at_text}</span>
-            </div>
-            """,
-            unsafe_allow_html=True,
-        )
-        with st.container(key="button_row"):
-            refresh_col, download_col = st.columns(2, gap="small")
-            with refresh_col:
-                st.button("Refresh", key="refresh_main_button", width="stretch", on_click=_request_refresh)
-            with download_col:
-                st.download_button(
-                    label="Download PNG",
-                    data=buffer,
-                    file_name=chart_name,
-                    mime="image/png",
-                    width="stretch",
-                )
-        with st.container(key="mobile_action_set"):
-            st.button("Next day", key="btn_next_day_mobile", on_click=_next_day, width="stretch")
-            st.button("Previous day", key="btn_prev_day_mobile", on_click=_prev_day, width="stretch")
-            st.button("Refresh", key="refresh_main_button_mobile", width="stretch", on_click=_request_refresh)
-            st.download_button(
-                label="Download PNG",
-                data=buffer,
-                file_name=chart_name,
-                mime="image/png",
-                key="download_png_mobile",
-                width="stretch",
-            )
+        chart_container = st.container()
+        fetched_container = st.container()
+        button_row_container = st.container()
+        mobile_action_container = st.container()
         service_day_end = base_date + timedelta(days=1) if int(service_start_hour) > 0 else base_date
         service_day_end_time = f"{int(service_start_hour):02d}:00" if int(service_start_hour) > 0 else "24:00"
         with st.expander("Flight memo", expanded=False):
@@ -1760,7 +1722,55 @@ with content_main:
 
                     if assignment_changed:
                         st.session_state.team_assignments = updated_assignments
-                        st.rerun()
+                        dep_df = _attach_team_assignments(dep_df, base_date, "dep")
+                        arr_df = _attach_team_assignments(arr_df, base_date, "arr")
+                        fig, summary = build_timeline_figure(dep_df, arr_df, config)
+        airline_tag = selected_airlines[0] if len(selected_airlines) == 1 else f"{selected_airlines[0]}_plus{len(selected_airlines) - 1}"
+        chart_name = (
+            f"{base_date.strftime('%Y-%m-%d')}_{airline_tag}_D{summary['total_dep']}_A{summary['total_arr']}.png"
+        )
+        buffer = io.BytesIO()
+        fig.savefig(buffer, format="png", dpi=200, bbox_inches="tight")
+        buffer.seek(0)
+
+        with chart_container:
+            st.pyplot(fig, width="content")
+        with fetched_container:
+            st.markdown(
+                f"""
+                <div class="last-fetched-block">
+                    <span class="last-fetched-label">Last fetched</span>
+                    <span class="last-fetched-value">{fetched_at_text}</span>
+                </div>
+                """,
+                unsafe_allow_html=True,
+            )
+        with button_row_container:
+            with st.container(key="button_row"):
+                refresh_col, download_col = st.columns(2, gap="small")
+                with refresh_col:
+                    st.button("Refresh", key="refresh_main_button", width="stretch", on_click=_request_refresh)
+                with download_col:
+                    st.download_button(
+                        label="Download PNG",
+                        data=buffer,
+                        file_name=chart_name,
+                        mime="image/png",
+                        width="stretch",
+                    )
+        with mobile_action_container:
+            with st.container(key="mobile_action_set"):
+                st.button("Next day", key="btn_next_day_mobile", on_click=_next_day, width="stretch")
+                st.button("Previous day", key="btn_prev_day_mobile", on_click=_prev_day, width="stretch")
+                st.button("Refresh", key="refresh_main_button_mobile", width="stretch", on_click=_request_refresh)
+                st.download_button(
+                    label="Download PNG",
+                    data=buffer,
+                    file_name=chart_name,
+                    mime="image/png",
+                    key="download_png_mobile",
+                    width="stretch",
+                )
         with st.expander("Flight schedule lookup"):
             with st.form("flight_lookup_form", border=False, enter_to_submit=False):
                 lookup_col1, lookup_col2 = st.columns(2, gap="small")
