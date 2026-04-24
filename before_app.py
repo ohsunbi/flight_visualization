@@ -83,6 +83,7 @@ DEFAULT_LABEL_FLAGS = {
     "show_des_org": False,
     "show_reg": False,
     "show_spot": False,
+    "show_team": True,
     "show_turnaround": True,
 }
 DEFAULT_TIMELINE_VALUES = {
@@ -100,6 +101,7 @@ LABEL_QUERY_KEYS = (
     ("desorg", "show_des_org"),
     ("reg", "show_reg"),
     ("spot", "show_spot"),
+    ("memo", "show_team"),
     ("turn", "show_turnaround"),
 )
 AIRLINE_OPTIONS = [
@@ -309,6 +311,16 @@ if "_applied_type_url_signature" not in st.session_state:
     st.session_state["_applied_type_url_signature"] = None
 if "_url_excluded_types" not in st.session_state:
     st.session_state["_url_excluded_types"] = []
+if "_main_fetch_signature" not in st.session_state:
+    st.session_state["_main_fetch_signature"] = None
+if "_main_dep_payload_base" not in st.session_state:
+    st.session_state["_main_dep_payload_base"] = None
+if "_main_arr_payload_base" not in st.session_state:
+    st.session_state["_main_arr_payload_base"] = None
+if "_main_dep_payload_next" not in st.session_state:
+    st.session_state["_main_dep_payload_next"] = None
+if "_main_arr_payload_next" not in st.session_state:
+    st.session_state["_main_arr_payload_next"] = None
 if "flight_lookup_code" not in st.session_state:
     st.session_state.flight_lookup_code = ""
 if "flight_lookup_start_date" not in st.session_state:
@@ -319,6 +331,10 @@ if "flight_lookup_direction" not in st.session_state:
     st.session_state.flight_lookup_direction = None
 if "flight_lookup_result" not in st.session_state:
     st.session_state.flight_lookup_result = None
+if "team_assignments" not in st.session_state:
+    st.session_state.team_assignments = {}
+if "team_assignment_filter" not in st.session_state:
+    st.session_state.team_assignment_filter = ""
 for state_key, default_value in DEFAULT_LABEL_FLAGS.items():
     if state_key not in st.session_state:
         st.session_state[state_key] = default_value
@@ -471,6 +487,7 @@ def _build_url_params(
     show_des_org: bool,
     show_reg: bool,
     show_spot: bool,
+    show_team: bool,
     show_turnaround: bool,
     time_basis: str,
     service_start_hour: int,
@@ -499,6 +516,7 @@ def _build_url_params(
         "show_des_org": bool(show_des_org),
         "show_reg": bool(show_reg),
         "show_spot": bool(show_spot),
+        "show_team": bool(show_team),
         "show_turnaround": bool(show_turnaround),
     }
     if current_labels != DEFAULT_LABEL_FLAGS:
@@ -699,6 +717,122 @@ def _normalize_hhmm(value) -> Optional[str]:
     if not (0 <= hour <= 23 and 0 <= minute <= 59):
         return None
     return digits
+
+
+def _normalize_team_text(value: object) -> str:
+    if value is None or pd.isna(value):
+        return ""
+
+    text = " ".join(str(value).replace("\n", " ").split()).strip()
+    return text
+
+
+def _normalize_team_key_part(value: object, *, upper: bool = True) -> str:
+    if value is None or pd.isna(value):
+        return ""
+
+    text = " ".join(str(value).split()).strip()
+    return text.upper() if upper else text
+
+
+def _build_team_assignment_key(base_date: date, direction: str, row: object) -> str:
+    flight_pk = _normalize_team_key_part(
+        row.get("FLIGHT_PK", row.get("flightPk", "")),
+        upper=False,
+    )
+    if flight_pk:
+        return f"{base_date.isoformat()}|{direction}|pk|{flight_pk}"
+
+    if str(direction).strip().lower() == "dep":
+        leg_value = row.get("DES", row.get("apArr", ""))
+        scheduled_value = row.get("STD", row.get("schTime", ""))
+    else:
+        leg_value = row.get("ORG", row.get("apIcao", ""))
+        scheduled_value = row.get("STA", row.get("sta", ""))
+
+    flt = _normalize_team_key_part(row.get("FLT", row.get("fpId", "")))
+    leg = _normalize_team_key_part(leg_value)
+    scheduled = _normalize_team_key_part(_normalize_hhmm(scheduled_value), upper=False)
+    reg = _normalize_team_key_part(row.get("REG", row.get("acId", "")))
+    spot = _normalize_team_key_part(row.get("SPOT", row.get("standDep", row.get("standArr", ""))))
+
+    return "|".join(
+        [
+            base_date.isoformat(),
+            str(direction).strip().lower(),
+            f"flt:{flt}",
+            f"leg:{leg}",
+            f"sch:{scheduled}",
+            f"reg:{reg}",
+            f"spot:{spot}",
+        ]
+    )
+
+
+def _attach_team_assignments(df: pd.DataFrame, base_date: date, direction: str) -> pd.DataFrame:
+    assigned = df.copy()
+    if assigned.empty:
+        assigned["TEAM_KEY"] = pd.Series(dtype=str)
+        assigned["TEAM"] = pd.Series(dtype=str)
+        return assigned
+
+    assignment_map = st.session_state.get("team_assignments", {})
+    assigned["TEAM_KEY"] = assigned.apply(
+        lambda row: _build_team_assignment_key(base_date, direction, row),
+        axis=1,
+    )
+    assigned["TEAM"] = assigned["TEAM_KEY"].map(lambda key: _normalize_team_text(assignment_map.get(key, "")))
+    return assigned
+
+
+def _build_team_assignment_editor_rows(
+    *,
+    dep_records: pd.DataFrame,
+    arr_records: pd.DataFrame,
+    base_date: date,
+) -> list[dict[str, str]]:
+    grouped_rows: dict[str, dict[str, object]] = {}
+
+    for direction, direction_label, records in (
+        ("dep", "Departure", dep_records),
+        ("arr", "Arrival", arr_records),
+    ):
+        if records is None or records.empty:
+            continue
+
+        for _, row in records.sort_values("marker").iterrows():
+            team_key = _build_team_assignment_key(base_date, direction, row)
+            raw_flt = str(row.get("FLT", "")).strip().upper()
+            display_flt = raw_flt.replace("ESR", "ZE")
+            if not display_flt:
+                continue
+
+            existing = grouped_rows.get(display_flt)
+            current_team = _normalize_team_text(row.get("TEAM", ""))
+
+            if existing is None:
+                grouped_rows[display_flt] = {
+                    "FLT": display_flt,
+                    "Team": current_team,
+                    "TEAM_KEYS": [team_key],
+                    "_sort_time": row.get("marker"),
+                }
+                continue
+
+            existing["TEAM_KEYS"].append(team_key)
+            if not existing.get("Team") and current_team:
+                existing["Team"] = current_team
+
+    rows = list(grouped_rows.values())
+    rows.sort(key=lambda item: (item.get("_sort_time"), item.get("FLT")))
+    return [
+        {
+            "FLT": str(item["FLT"]),
+            "Team": str(item["Team"]),
+            "TEAM_KEYS": list(item.get("TEAM_KEYS", [])),
+        }
+        for item in rows
+    ]
 
 
 def _pick_service_day_time(record: dict, direction: str, time_basis: str) -> Optional[str]:
@@ -1186,10 +1320,11 @@ type_filter_slot = st.sidebar.empty()
 st.sidebar.markdown("---")
 st.sidebar.subheader("Labels on bars")
 show_flt = st.sidebar.checkbox("FLT", key="show_flt")
+show_turnaround = st.sidebar.checkbox("Turn-around", key="show_turnaround")
 show_des_org = st.sidebar.checkbox("DES/ORG", key="show_des_org")
 show_reg = st.sidebar.checkbox("REG", key="show_reg")
 show_spot = st.sidebar.checkbox("SPOT", key="show_spot")
-show_turnaround = st.sidebar.checkbox("Turn-around", key="show_turnaround")
+show_team = st.sidebar.checkbox("MEMO", key="show_team")
 
 st.sidebar.markdown("---")
 st.sidebar.header("Timeline Settings")
@@ -1243,37 +1378,57 @@ query = UbikaisQuery(
 refresh_data = bool(st.session_state.get("_force_refresh", False))
 should_refresh = refresh_data
 st.session_state["_force_refresh"] = False
+main_fetch_signature = (
+    base_date.isoformat(),
+    tuple(selected_airlines),
+    query.departure_airport,
+    query.arrival_airport,
+    bool(int(service_start_hour) > 0),
+)
+needs_main_fetch = should_refresh or st.session_state.get("_main_fetch_signature") != main_fetch_signature
 
-with st.spinner("Loading flight data from ubikais..."):
-    try:
+try:
+    if needs_main_fetch:
         next_day_query = replace(query, flight_date=base_date + timedelta(days=1))
+        spinner_context = st.spinner("Loading flight data from ubikais...")
+        with spinner_context:
+            dep_payload_base = fetch_records_for_airlines("dep", query, selected_airlines, refresh=should_refresh)
+            arr_payload_base = fetch_records_for_airlines("arr", query, selected_airlines, refresh=should_refresh)
 
-        dep_payload_base = fetch_records_for_airlines("dep", query, selected_airlines, refresh=should_refresh)
-        arr_payload_base = fetch_records_for_airlines("arr", query, selected_airlines, refresh=should_refresh)
+            dep_payload_next = None
+            arr_payload_next = None
+            if int(service_start_hour) > 0:
+                dep_payload_next = fetch_records_for_airlines("dep", next_day_query, selected_airlines, refresh=should_refresh)
+                arr_payload_next = fetch_records_for_airlines("arr", next_day_query, selected_airlines, refresh=should_refresh)
 
-        dep_payload_next = None
-        arr_payload_next = None
-        if int(service_start_hour) > 0:
-            dep_payload_next = fetch_records_for_airlines("dep", next_day_query, selected_airlines, refresh=should_refresh)
-            arr_payload_next = fetch_records_for_airlines("arr", next_day_query, selected_airlines, refresh=should_refresh)
+        st.session_state["_main_fetch_signature"] = main_fetch_signature
+        st.session_state["_main_dep_payload_base"] = dep_payload_base
+        st.session_state["_main_arr_payload_base"] = arr_payload_base
+        st.session_state["_main_dep_payload_next"] = dep_payload_next
+        st.session_state["_main_arr_payload_next"] = arr_payload_next
+    else:
+        dep_payload_base = st.session_state.get("_main_dep_payload_base")
+        arr_payload_base = st.session_state.get("_main_arr_payload_base")
+        dep_payload_next = st.session_state.get("_main_dep_payload_next")
+        arr_payload_next = st.session_state.get("_main_arr_payload_next")
 
-        dep_payload = _merge_service_day_payload(
-            direction="dep",
-            base_payload=dep_payload_base,
-            next_payload=dep_payload_next,
-            time_basis=str(time_basis),
-            service_start_hour=int(service_start_hour),
-        )
-        arr_payload = _merge_service_day_payload(
-            direction="arr",
-            base_payload=arr_payload_base,
-            next_payload=arr_payload_next,
-            time_basis=str(time_basis),
-            service_start_hour=int(service_start_hour),
-        )
-    except Exception as exc:
-        st.error(f"Ubikais data load failed: {exc}")
-        st.stop()
+    dep_payload = _merge_service_day_payload(
+        direction="dep",
+        base_payload=dep_payload_base,
+        next_payload=dep_payload_next,
+        time_basis=str(time_basis),
+        service_start_hour=int(service_start_hour),
+    )
+    arr_payload = _merge_service_day_payload(
+        direction="arr",
+        base_payload=arr_payload_base,
+        next_payload=arr_payload_next,
+        time_basis=str(time_basis),
+        service_start_hour=int(service_start_hour),
+    )
+except Exception as exc:
+    st.error(f"Ubikais data load failed: {exc}")
+    st.stop()
 
 dep_df = departures_from_ubikais(dep_payload["records"])
 arr_df = arrivals_from_ubikais(arr_payload["records"])
@@ -1365,6 +1520,9 @@ else:
     dep_df = dep_df.iloc[0:0].copy()
     arr_df = arr_df.iloc[0:0].copy()
 
+dep_df = _attach_team_assignments(dep_df, base_date, "dep")
+arr_df = _attach_team_assignments(arr_df, base_date, "arr")
+
 desired_url_params = _build_url_params(
     selected_airlines=selected_airlines,
     type_preferences=type_preferences,
@@ -1372,6 +1530,7 @@ desired_url_params = _build_url_params(
     show_des_org=show_des_org,
     show_reg=show_reg,
     show_spot=show_spot,
+    show_team=show_team,
     show_turnaround=show_turnaround,
     time_basis=str(time_basis),
     service_start_hour=int(service_start_hour),
@@ -1403,6 +1562,7 @@ config = TimelineConfig(
     show_des_org=show_des_org,
     show_reg=show_reg,
     show_spot=show_spot,
+    show_team=show_team,
     show_turnaround=show_turnaround,
 )
 
@@ -1484,67 +1644,123 @@ with content_main:
             )
         service_day_end = base_date + timedelta(days=1) if int(service_start_hour) > 0 else base_date
         service_day_end_time = f"{int(service_start_hour):02d}:00" if int(service_start_hour) > 0 else "24:00"
-        with st.expander("Help", expanded=False):
-            st.markdown(
-                """
-**기본 사용 방법**
-- Date에서 조회할 날짜를 선택합니다.
-- Airlines에서 보고 싶은 항공사를 고릅니다.
-- Aircraft type에서 포함하거나 제외할 기종을 고릅니다.
-- Filters 안에서 바꾼 값은 Apply를 눌러야 차트에 반영됩니다.
-- Refresh를 누르면 ubikais에서 최신 데이터를 다시 가져옵니다.
-
-**Labels on bars**
-- FLT: 항공편 번호를 표시합니다.
-- DES/ORG: Departure는 destination airport, Arrival는 origin airport를 표시합니다.
-- REG: 항공기 등록부호를 표시합니다.
-- SPOT: Spot 정보를 표시합니다.
-- Turn-around: 도착편과 다음 출발편의 연결 관계를 화살표로 표시합니다.
-
-**Time basis**
-- Ground ops (Block Time): blockOn / blockOff time을 우선으로 사용합니다.
-- Flight ops (ATD/ATA): ATA / ATD를 우선으로 사용합니다.
-
-**Service day starts at (hour)**
-- 이 값은 하루의 기준 시작 시각을 정합니다.
-- 예를 들어 0이면 00:00부터 24:00까지를 같은 날짜 차트로 봅니다.
-- 2이면 해당 날짜 02:00부터 다음날 01:59까지를 같은 service day로 봅니다.
-- 따라서 새벽 항공편을 전날 operation으로 포함해서 보고 싶을 때 사용합니다.
-
-**Handling time (min)**
-- Departure handling (before ATD), Departure handling (after ATD)는 Departure 막대 길이를 정합니다.
-- Arrival handling (before ATA), Arrival handling (after ATA)는 Arrival 막대 길이를 정합니다.
-- 이 값은 차트에서 handling time을 얼마나 길게 볼지 정하는 설정입니다.
-
-**Turn-around**
-- Turn-around는 Arrival 이후 일정 시간 안에 이어지는 Departure를 연결편으로 봅니다.
-- 기본적으로 REG 또는 SPOT 중 하나가 같고, Turn-around limit 안에 있으면 연결 후보가 됩니다.
-- 후보가 여러 개면 가장 가까운 다음 Departure 1개를 연결합니다.
-
-**URL 저장**
-- Airlines, Aircraft type, Labels on bars, Timeline Settings, Handling time, Turn-around limit 값은 URL에 반영됩니다.
-- 같은 URL을 다시 열면 해당 설정이 초기값으로 복원됩니다.
-- Date는 URL에 저장되지 않으며, 앱을 열 때 기준의 오늘 날짜로 시작합니다.
-                """
+        with st.expander("Flight memo", expanded=False):
+            team_editor_rows = _build_team_assignment_editor_rows(
+                dep_records=summary["dep_records"],
+                arr_records=summary["arr_records"],
+                base_date=base_date,
             )
-        with st.expander("More details"):
-            st.caption(
-                f"Service day: {base_date.strftime('%Y-%m-%d')} {int(service_start_hour):02d}:00 "
-                f"to {service_day_end.strftime('%Y-%m-%d')} {service_day_end_time}"
-            )
-            st.caption("Data source: UBIKAIS departure/arrival JSON endpoints")
-            st.caption(
-                f"Query: airlines {', '.join(selected_airlines)}, dep {query.departure_airport}, "
-                f"arr {query.arrival_airport}, typ {', '.join(selected_types) if selected_types else 'None'}"
-            )
-        with st.expander("Raw data preview"):
-            preview_col1, preview_col2 = st.columns(2)
-            with preview_col1:
-                st.subheader("Departures")
-                st.dataframe(dep_df)
-            with preview_col2:
-                st.subheader("Arrivals")
-                st.dataframe(arr_df)
+            if not team_editor_rows:
+                st.caption("No visible flights to assign.")
+            else:
+                editor_df = pd.DataFrame(team_editor_rows).set_index("FLT")
+                filter_col, editor_col = st.columns([1.1, 2.4], gap="small")
+
+                with filter_col:
+                    team_filter = st.text_input(
+                        "FLT filter",
+                        key="team_assignment_filter",
+                        placeholder="ex) ZE605",
+                    ).strip()
+
+                filtered_editor_df = editor_df
+                if team_filter:
+                    flt_mask = filtered_editor_df.index.astype(str).str.contains(team_filter, case=False, na=False)
+                    filtered_editor_df = filtered_editor_df[flt_mask].copy()
+
+                if filtered_editor_df.empty:
+                    with editor_col:
+                        st.caption("No flights match the current filter.")
+                    filtered_editor_df = None
+
+                visible_flights = list(filtered_editor_df.index) if filtered_editor_df is not None else []
+                editor_signature = (
+                    f"{len(visible_flights)}::"
+                    f"{visible_flights[0] if visible_flights else ''}::"
+                    f"{visible_flights[-1] if visible_flights else ''}"
+                )
+                team_editor_key = (
+                    f"team_assignment_editor::{base_date.isoformat()}::{editor_signature}"
+                )
+
+                if filtered_editor_df is not None:
+                    flt_to_team_keys = {
+                        str(flt): [str(key) for key in (team_keys or []) if str(key)]
+                        for flt, team_keys in filtered_editor_df["TEAM_KEYS"].items()
+                    }
+                    current_assignments = dict(st.session_state.get("team_assignments", {}))
+                    updated_assignments = dict(current_assignments)
+                    assignment_changed = False
+
+                    if len(filtered_editor_df) == 1:
+                        flight_code = str(filtered_editor_df.index[0]).strip()
+                        team_keys = flt_to_team_keys.get(flight_code, [])
+                        existing_values = {
+                            _normalize_team_text(current_assignments.get(team_key, ""))
+                            for team_key in team_keys
+                        }
+                        existing_values.discard("")
+                        current_team = next(iter(existing_values), "")
+                        single_team_key = f"single_team_input::{base_date.isoformat()}::{flight_code}"
+                        if single_team_key not in st.session_state:
+                            st.session_state[single_team_key] = current_team
+
+                        with editor_col:
+                            single_col1, single_col2 = st.columns([1.1, 1.6], gap="small")
+                            with single_col1:
+                                st.text_input("FLT", value=flight_code, disabled=True, key=f"{single_team_key}::flt")
+                            with single_col2:
+                                team_value = st.text_input("Memo", key=single_team_key)
+
+                        normalized_team = _normalize_team_text(team_value)
+                        if normalized_team != current_team:
+                            for team_key in team_keys:
+                                if normalized_team:
+                                    updated_assignments[str(team_key)] = normalized_team
+                                else:
+                                    updated_assignments.pop(str(team_key), None)
+                            assignment_changed = True
+                    else:
+                        editor_view_df = (
+                            filtered_editor_df.drop(columns=["TEAM_KEYS"])
+                            .reset_index()
+                            .rename(columns={"Team": "Memo"})
+                        )
+                        with editor_col:
+                            edited_team_df = st.data_editor(
+                                editor_view_df,
+                                hide_index=True,
+                                width="stretch",
+                                height=min(160, 52 + max(1, len(editor_view_df)) * 38),
+                                column_order=["FLT", "Memo"],
+                                disabled=["FLT"],
+                                key=team_editor_key,
+                            )
+
+                        for _, row in edited_team_df.iterrows():
+                            normalized_team = _normalize_team_text(row.get("Memo", ""))
+                            flight_code = str(row.get("FLT", "")).strip()
+                            team_keys = flt_to_team_keys.get(flight_code, [])
+                            existing_values = {
+                                _normalize_team_text(current_assignments.get(team_key, ""))
+                                for team_key in team_keys
+                            }
+                            existing_values.discard("")
+                            current_team = next(iter(existing_values), "")
+
+                            if normalized_team == current_team:
+                                continue
+
+                            for team_key in team_keys:
+                                if normalized_team:
+                                    updated_assignments[str(team_key)] = normalized_team
+                                else:
+                                    updated_assignments.pop(str(team_key), None)
+                            assignment_changed = True
+
+                    if assignment_changed:
+                        st.session_state.team_assignments = updated_assignments
+                        st.rerun()
         with st.expander("Flight schedule lookup"):
             with st.form("flight_lookup_form", border=False, enter_to_submit=False):
                 lookup_col1, lookup_col2 = st.columns(2, gap="small")
@@ -1721,3 +1937,64 @@ with content_main:
                     st.dataframe(pd.DataFrame(detail_rows), width="stretch", hide_index=True)
                 else:
                     st.info("No operation found in the selected period.")
+        with st.expander("More details"):
+            st.caption(
+                f"Service day: {base_date.strftime('%Y-%m-%d')} {int(service_start_hour):02d}:00 "
+                f"to {service_day_end.strftime('%Y-%m-%d')} {service_day_end_time}"
+            )
+            st.caption("Data source: UBIKAIS departure/arrival JSON endpoints")
+            st.caption(
+                f"Query: airlines {', '.join(selected_airlines)}, dep {query.departure_airport}, "
+                f"arr {query.arrival_airport}, typ {', '.join(selected_types) if selected_types else 'None'}"
+            )
+        with st.expander("Raw data preview"):
+            preview_col1, preview_col2 = st.columns(2)
+            with preview_col1:
+                st.subheader("Departures")
+                st.dataframe(dep_df)
+            with preview_col2:
+                st.subheader("Arrivals")
+                st.dataframe(arr_df)
+        with st.expander("Help", expanded=False):
+            st.markdown(
+                """
+**기본 사용 방법**
+- Date에서 조회할 날짜를 선택합니다.
+- Airlines에서 보고 싶은 항공사를 고릅니다.
+- Aircraft type에서 포함하거나 제외할 기종을 고릅니다.
+- Filters 안에서 바꾼 값은 Apply를 눌러야 차트에 반영됩니다.
+- Refresh를 누르면 ubikais에서 최신 데이터를 다시 가져옵니다.
+
+**Labels on bars**
+- FLT: 항공편 번호를 표시합니다.
+- DES/ORG: Departure는 destination airport, Arrival는 origin airport를 표시합니다.
+- REG: 항공기 등록부호를 표시합니다.
+- SPOT: Spot 정보를 표시합니다.
+- Turn-around: 도착편과 다음 출발편의 연결 관계를 화살표로 표시합니다.
+
+**Time basis**
+- Ground ops (Block Time): blockOn / blockOff time을 우선으로 사용합니다.
+- Flight ops (ATD/ATA): ATA / ATD를 우선으로 사용합니다.
+
+**Service day starts at (hour)**
+- 이 값은 하루의 기준 시작 시각을 정합니다.
+- 예를 들어 0이면 00:00부터 24:00까지를 같은 날짜 차트로 봅니다.
+- 2이면 해당 날짜 02:00부터 다음날 01:59까지를 같은 service day로 봅니다.
+- 따라서 새벽 항공편을 전날 operation으로 포함해서 보고 싶을 때 사용합니다.
+
+**Handling time (min)**
+- Departure handling (before ATD), Departure handling (after ATD)는 Departure 막대 길이를 정합니다.
+- Arrival handling (before ATA), Arrival handling (after ATA)는 Arrival 막대 길이를 정합니다.
+- 이 값은 차트에서 handling time을 얼마나 길게 볼지 정하는 설정입니다.
+
+**Turn-around**
+- Turn-around는 Arrival 이후 일정 시간 안에 이어지는 Departure를 연결편으로 봅니다.
+- 기본적으로 REG 또는 SPOT 중 하나가 같고, Turn-around limit 안에 있으면 연결 후보가 됩니다.
+- 후보가 여러 개면 가장 가까운 다음 Departure 1개를 연결합니다.
+
+**URL 저장**
+- Airlines, Aircraft type, Labels on bars, Timeline Settings, Handling time, Turn-around limit 값은 URL에 반영됩니다.
+- 같은 URL을 다시 열면 해당 설정이 초기값으로 복원됩니다.
+- Date는 URL에 저장되지 않으며, 앱을 열 때 기준의 오늘 날짜로 시작합니다.
+                """
+            )

@@ -23,6 +23,12 @@ A4_LANDSCAPE_HEIGHT = 8.27
 COL_ARR = "#1f77b4"
 COL_DEP = "#d62728"
 
+TEAM_BADGE_FONT_FAMILIES = [
+    "Malgun Gothic",
+    "NanumGothic",
+    "DejaVu Sans",
+]
+
 
 @dataclass(frozen=True)
 class TimelineConfig:
@@ -39,16 +45,18 @@ class TimelineConfig:
     show_des_org: bool = False
     show_reg: bool = False
     show_spot: bool = False
+    show_team: bool = False
     show_turnaround: bool = False
 
 
 def departures_from_ubikais(records: list[dict[str, Any]]) -> pd.DataFrame:
     df = pd.DataFrame(records)
     if df.empty:
-        return pd.DataFrame(columns=["FLT", "DES", "REG", "TYP", "SPOT", "BLOCK_OFF", "ATD", "ETD", "STD"])
+        return pd.DataFrame(columns=["FLIGHT_PK", "FLT", "DES", "REG", "TYP", "SPOT", "BLOCK_OFF", "ATD", "ETD", "STD"])
 
     return pd.DataFrame(
         {
+            "FLIGHT_PK": _series_or_blank(df, "flightPk"),
             "FLT": _series_or_blank(df, "fpId"),
             "DES": _series_or_blank(df, "apArr"),
             "REG": _series_or_blank(df, "acId"),
@@ -65,10 +73,11 @@ def departures_from_ubikais(records: list[dict[str, Any]]) -> pd.DataFrame:
 def arrivals_from_ubikais(records: list[dict[str, Any]]) -> pd.DataFrame:
     df = pd.DataFrame(records)
     if df.empty:
-        return pd.DataFrame(columns=["FLT", "ORG", "REG", "TYP", "SPOT", "BLOCK_ON", "ATA", "ETA", "STA"])
+        return pd.DataFrame(columns=["FLIGHT_PK", "FLT", "ORG", "REG", "TYP", "SPOT", "BLOCK_ON", "ATA", "ETA", "STA"])
 
     return pd.DataFrame(
         {
+            "FLIGHT_PK": _series_or_blank(df, "flightPk"),
             "FLT": _series_or_blank(df, "fpId"),
             "ORG": _series_or_blank(df, "apIcao"),
             "REG": _series_or_blank(df, "acId"),
@@ -128,8 +137,8 @@ def build_timeline_figure(
         else []
     )
 
-    dep_block = dep_plot[["source_index", "Label", "start", "end", "marker", "type", "time_str"]].sort_values("start").reset_index(drop=True)
-    arr_block = arr_plot[["source_index", "Label", "start", "end", "marker", "type", "time_str"]].sort_values("start").reset_index(drop=True)
+    dep_block = dep_plot[["source_index", "Label", "TEAM", "start", "end", "marker", "type", "time_str"]].sort_values("start").reset_index(drop=True)
+    arr_block = arr_plot[["source_index", "Label", "TEAM", "start", "end", "marker", "type", "time_str"]].sort_values("start").reset_index(drop=True)
     if turnaround_pairs:
         dep_block, arr_block = _reorder_blocks_for_turnaround(
             dep_plot=dep_plot,
@@ -181,6 +190,7 @@ def build_timeline_figure(
         arr_block=arr_wrapped,
         panel_count=panel_count,
         rows_per_panel=rows_per_panel,
+        show_team=config.show_team,
         x_start=start_time,
         x_end=end_time,
     )
@@ -214,6 +224,8 @@ def build_timeline_figure(
 
 def _prepare_departures(dep_df: pd.DataFrame, config: TimelineConfig) -> pd.DataFrame:
     dep_df = dep_df.copy()
+    if "TEAM" not in dep_df.columns:
+        dep_df["TEAM"] = ""
     dep_df["source_index"] = dep_df.index
     dep_df["TIME_RAW"] = dep_df.apply(lambda row: _pick_time_dep(row, config.time_basis), axis=1)
     dep_df = dep_df[pd.notna(dep_df["TIME_RAW"])].reset_index(drop=True)
@@ -254,6 +266,8 @@ def _prepare_departures(dep_df: pd.DataFrame, config: TimelineConfig) -> pd.Data
 
 def _prepare_arrivals(arr_df: pd.DataFrame, config: TimelineConfig) -> pd.DataFrame:
     arr_df = arr_df.copy()
+    if "TEAM" not in arr_df.columns:
+        arr_df["TEAM"] = ""
     arr_df["source_index"] = arr_df.index
     arr_df["TIME_RAW"] = arr_df.apply(lambda row: _pick_time_arr(row, config.time_basis), axis=1)
     arr_df = arr_df[pd.notna(arr_df["TIME_RAW"])].reset_index(drop=True)
@@ -299,6 +313,7 @@ def _plot_wrapped_timeline(
     *,
     panel_count: int,
     rows_per_panel: int,
+    show_team: bool,
     x_start,
     x_end,
 ) -> None:
@@ -326,12 +341,35 @@ def _plot_wrapped_timeline(
         is_paired_slot = bool(row.get("paired_slot", False))
         dep_label_y = y_pos - 0.05 if is_paired_slot else y_pos
         dep_time_y = y_pos - 0.11 if is_paired_slot else y_pos + 0.15
+        dep_badge_x = row["start"] + timedelta(minutes=1)
+        dep_label_x = row["end"] + timedelta(minutes=5)
+        dep_team = str(row.get("TEAM", "")).strip()
         legend_label = "Departure" if not dep_labeled else ""
         dep_labeled = True
         ax.plot([row["start"], row["end"]], [y_pos, y_pos], color=COL_DEP, linewidth=4, label=legend_label, zorder=2)
+        if show_team and dep_team:
+            ax.text(
+                dep_badge_x,
+                y_pos,
+                dep_team,
+                ha="left",
+                va="center",
+                fontsize=6.8,
+                fontweight="bold",
+                fontfamily=TEAM_BADGE_FONT_FAMILIES,
+                color="#ffffff",
+                bbox={
+                    "boxstyle": "round,pad=0.18,rounding_size=0.18",
+                    "facecolor": "#2f3542",
+                    "edgecolor": "#4b5563",
+                    "linewidth": 0.8,
+                },
+                clip_on=False,
+                zorder=3.2,
+            )
         if row["Label"]:
             ax.text(
-                row["end"] + timedelta(minutes=5),
+                dep_label_x,
                 dep_label_y,
                 row["Label"],
                 va="center",
@@ -355,12 +393,35 @@ def _plot_wrapped_timeline(
         row_y = _arr_display_y(row)
         arr_label_y = row_y + 0.05 if bool(row.get("paired_slot", False)) else row_y
         arr_time_y = row_y + (0.11 if bool(row.get("paired_slot", False)) else 0.15)
+        arr_badge_x = row["start"] + timedelta(minutes=1)
+        arr_label_x = row["end"] + timedelta(minutes=5)
+        arr_team = str(row.get("TEAM", "")).strip()
         legend_label = "Arrival" if not arr_labeled else ""
         arr_labeled = True
         ax.plot([row["start"], row["end"]], [row_y, row_y], color=COL_ARR, linewidth=4, label=legend_label, zorder=2)
+        if show_team and arr_team:
+            ax.text(
+                arr_badge_x,
+                row_y,
+                arr_team,
+                ha="left",
+                va="center",
+                fontsize=6.8,
+                fontweight="bold",
+                fontfamily=TEAM_BADGE_FONT_FAMILIES,
+                color="#ffffff",
+                bbox={
+                    "boxstyle": "round,pad=0.18,rounding_size=0.18",
+                    "facecolor": "#2f3542",
+                    "edgecolor": "#4b5563",
+                    "linewidth": 0.8,
+                },
+                clip_on=False,
+                zorder=3.2,
+            )
         if row["Label"]:
             ax.text(
-                row["end"] + timedelta(minutes=5),
+                arr_label_x,
                 arr_label_y,
                 row["Label"],
                 va="center",
