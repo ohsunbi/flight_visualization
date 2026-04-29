@@ -155,10 +155,16 @@ def build_timeline_figure(
     if total_dep + total_arr >= MIN_TOTAL_RECORDS_FOR_WRAP:
         panel_count = max(panel_count, 2)
     rows_per_panel = max(1, math.ceil(visible_rows / panel_count))
-    dep_wrapped = _assign_wrap_rows(dep_block, rows_per_panel)
-    arr_wrapped = _assign_wrap_rows(arr_block, rows_per_panel)
+    dep_wrapped = _apply_display_row_spill(_assign_wrap_rows(dep_block, rows_per_panel), rows_per_panel)
+    arr_wrapped = _apply_display_row_spill(_assign_wrap_rows(arr_block, rows_per_panel), rows_per_panel)
+    display_row_candidates = []
+    if not dep_wrapped.empty and "display_row" in dep_wrapped.columns:
+        display_row_candidates.extend(dep_wrapped["display_row"].dropna().tolist())
+    if not arr_wrapped.empty and "display_row" in arr_wrapped.columns:
+        display_row_candidates.extend(arr_wrapped["display_row"].dropna().tolist())
+    plot_rows = max(rows_per_panel, int(max(display_row_candidates, default=rows_per_panel - 1)) + 1)
 
-    fig_height = max(A4_LANDSCAPE_HEIGHT, rows_per_panel * 0.28 + 3.0)
+    fig_height = max(A4_LANDSCAPE_HEIGHT, plot_rows * 0.28 + 3.0)
     fig, ax = plt.subplots(figsize=(A4_LANDSCAPE_WIDTH, fig_height))
     fig.subplots_adjust(left=0.04, right=0.98, top=0.90, bottom=0.18)
 
@@ -189,7 +195,7 @@ def build_timeline_figure(
         dep_block=dep_wrapped,
         arr_block=arr_wrapped,
         panel_count=panel_count,
-        rows_per_panel=rows_per_panel,
+        rows_per_panel=plot_rows,
         show_team=config.show_team,
         x_start=start_time,
         x_end=end_time,
@@ -486,7 +492,11 @@ def _plot_overlap_numbers(
 
 def _assign_wrap_rows(block: pd.DataFrame, rows_per_panel: int) -> pd.DataFrame:
     if block.empty:
-        return block.assign(wrap_panel=pd.Series(dtype=int), wrap_row=pd.Series(dtype=float))
+        return block.assign(
+            wrap_panel=pd.Series(dtype=int),
+            wrap_row=pd.Series(dtype=float),
+            display_row=pd.Series(dtype=float),
+        )
 
     wrapped = block.copy()
     row_source = (
@@ -496,7 +506,74 @@ def _assign_wrap_rows(block: pd.DataFrame, rows_per_panel: int) -> pd.DataFrame:
     )
     wrapped["wrap_panel"] = row_source // rows_per_panel
     wrapped["wrap_row"] = row_source % rows_per_panel
+    wrapped["display_row"] = wrapped["wrap_row"].astype(float)
     return wrapped
+
+
+def _apply_display_row_spill(block: pd.DataFrame, rows_per_panel: int) -> pd.DataFrame:
+    if block.empty:
+        return block
+
+    adjusted = block.copy()
+    adjusted["display_row"] = adjusted["wrap_row"].astype(float)
+    time_threshold = timedelta(minutes=120)
+    next_spill_row = rows_per_panel
+    spill_occupancy: dict[int, list[pd.Timestamp]] = {}
+    paired_protection: dict[int, list[pd.Timestamp]] = {}
+
+    paired_rows = adjusted[adjusted["paired_slot"].fillna(False)]
+    for _, paired_row in paired_rows.iterrows():
+        marker = paired_row["marker"]
+        base_wrap_row = int(paired_row["wrap_row"])
+        if 0 <= base_wrap_row < rows_per_panel:
+            paired_protection.setdefault(base_wrap_row, []).append(marker)
+
+    for wrap_row, group in adjusted.groupby("wrap_row", sort=True):
+        group = group.sort_values("marker")
+        base_occupancy: list[tuple[pd.Timestamp, int]] = []
+
+        for idx in group.index:
+            row = adjusted.loc[idx]
+            marker = row["marker"]
+            wrap_panel = int(row["wrap_panel"])
+            is_paired = bool(row.get("paired_slot", False))
+
+            same_row_conflict = False
+            for existing_marker, existing_panel in base_occupancy:
+                if existing_panel != wrap_panel and abs(marker - existing_marker) <= time_threshold:
+                    same_row_conflict = True
+                    break
+
+            paired_row_conflict = False
+            if not is_paired:
+                for paired_marker in paired_protection.get(wrap_row, []):
+                    if abs(marker - paired_marker) <= time_threshold:
+                        paired_row_conflict = True
+                        break
+
+            if (same_row_conflict or paired_row_conflict) and not is_paired:
+                assigned_spill_row = None
+                for candidate_row in range(rows_per_panel, next_spill_row):
+                    candidate_conflict = False
+                    for existing_marker in spill_occupancy.get(candidate_row, []):
+                        if abs(marker - existing_marker) <= time_threshold:
+                            candidate_conflict = True
+                            break
+                    if not candidate_conflict:
+                        assigned_spill_row = candidate_row
+                        break
+
+                if assigned_spill_row is None:
+                    assigned_spill_row = next_spill_row
+                    next_spill_row += 1
+
+                adjusted.at[idx, "display_row"] = float(assigned_spill_row)
+                spill_occupancy.setdefault(assigned_spill_row, []).append(marker)
+                continue
+
+            base_occupancy.append((marker, wrap_panel))
+
+    return adjusted
 
 
 def _reorder_blocks_for_turnaround(
@@ -820,12 +897,12 @@ def _plot_turnaround_links(
 
 
 def _dep_display_y(row: pd.Series) -> float:
-    base_row = float(row["wrap_row"])
+    base_row = float(row.get("display_row", row["wrap_row"]))
     return base_row + (0.14 if bool(row.get("paired_slot", False)) else 0.0)
 
 
 def _arr_display_y(row: pd.Series) -> float:
-    base_row = float(row["wrap_row"])
+    base_row = float(row.get("display_row", row["wrap_row"]))
     return base_row + (0.32 if bool(row.get("paired_slot", False)) else 0.55)
 
 
