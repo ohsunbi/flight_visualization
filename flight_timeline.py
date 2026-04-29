@@ -139,6 +139,8 @@ def build_timeline_figure(
 
     dep_block = dep_plot[["source_index", "Label", "TEAM", "start", "end", "marker", "type", "time_str"]].sort_values("start").reset_index(drop=True)
     arr_block = arr_plot[["source_index", "Label", "TEAM", "start", "end", "marker", "type", "time_str"]].sort_values("start").reset_index(drop=True)
+    dep_block["paired_slot"] = False
+    arr_block["paired_slot"] = False
     if turnaround_pairs:
         dep_block, arr_block = _reorder_blocks_for_turnaround(
             dep_plot=dep_plot,
@@ -515,6 +517,8 @@ def _apply_display_row_spill(block: pd.DataFrame, rows_per_panel: int) -> pd.Dat
         return block
 
     adjusted = block.copy()
+    if "paired_slot" not in adjusted.columns:
+        adjusted["paired_slot"] = False
     adjusted["display_row"] = adjusted["wrap_row"].astype(float)
     time_threshold = timedelta(minutes=120)
     next_spill_row = rows_per_panel
