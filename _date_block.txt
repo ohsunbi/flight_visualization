@@ -1,0 +1,9 @@
+st.sidebar.date_input("Date", key="base_date", label_visibility="collapsed")
+date_nav_col1, date_nav_col2, date_nav_col3 = st.sidebar.columns(3, gap="small")
+with date_nav_col1:
+    st.button("◀", key="btn_prev_day", on_click=_prev_day, width="stretch")
+with date_nav_col2:
+    st.button("◉", key="btn_today_kst", on_click=_today_kst, width="stretch")
+with date_nav_col3:
+    st.button("▶", key="btn_next_day", on_click=_next_day, width="stretch")
+

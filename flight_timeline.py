@@ -9,6 +9,7 @@ import matplotlib.dates as mdates
 import matplotlib.pyplot as plt
 import pandas as pd
 from matplotlib import transforms
+from matplotlib import font_manager
 
 from airport_codes import icao_to_iata
 
@@ -23,11 +24,19 @@ A4_LANDSCAPE_HEIGHT = 8.27
 COL_ARR = "#1f77b4"
 COL_DEP = "#d62728"
 
-TEAM_BADGE_FONT_FAMILIES = [
-    "Malgun Gothic",
-    "NanumGothic",
-    "DejaVu Sans",
-]
+def _resolve_team_badge_font_families() -> list[str]:
+    available_families = {font.name for font in font_manager.fontManager.ttflist}
+    preferred_families = [
+        "Malgun Gothic",
+        "NanumGothic",
+    ]
+    resolved = [family for family in preferred_families if family in available_families]
+    if "DejaVu Sans" in available_families:
+        resolved.append("DejaVu Sans")
+    return resolved or ["DejaVu Sans"]
+
+
+TEAM_BADGE_FONT_FAMILIES = _resolve_team_badge_font_families()
 
 
 @dataclass(frozen=True)

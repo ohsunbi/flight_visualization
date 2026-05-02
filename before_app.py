@@ -7,6 +7,7 @@ from dataclasses import replace
 from datetime import date, datetime, timedelta, timezone
 from html import escape
 from typing import Optional
+from zoneinfo import ZoneInfo
 
 import matplotlib.pyplot as plt
 import pandas as pd
@@ -124,6 +125,26 @@ AIRLINE_SHORT_LABELS = {
     "CRK": "CRK 홍콩",
 }
 DEFAULT_AIRLINE_CODES = [code for code, _ in AIRLINE_OPTIONS]
+AIRPORT_OPTIONS = [
+    ("RKSI", "INCHEON"),
+    ("RKSS", "GIMPO"),
+    ("RKTU", "CHEONGJU"),
+    ("RKNY", "YANGYANG"),
+    ("RKJK", "GUNSAN"),
+    ("RKNW", "WONJU"),
+    ("RKPC", "JEJU"),
+    ("RKPK", "GIMHAE"),
+    ("RKTN", "DAEGU"),
+    ("RKJJ", "GWANGJU"),
+    ("RKJY", "YEOSU"),
+    ("RKPU", "ULSAN"),
+    ("RKTH", "POHANG"),
+    ("RKPS", "SACHEON"),
+    ("RKJB", "MUAN"),
+    ("RKTL", "ULJIN"),
+]
+AIRPORT_LABELS = {code: f"[{code}] {name}" for code, name in AIRPORT_OPTIONS}
+DEFAULT_AIRPORT_CODE = "RKSI"
 
 st.markdown(
     """
@@ -296,7 +317,7 @@ st.markdown(
 
 
 if "base_date" not in st.session_state:
-    st.session_state.base_date = date.today()
+    st.session_state.base_date = datetime.now(ZoneInfo("Asia/Seoul")).date()
 if "airline_preferences" not in st.session_state:
     st.session_state.airline_preferences = {code: code == "ESR" for code, _ in AIRLINE_OPTIONS}
 if "custom_airline_codes" not in st.session_state:
@@ -335,6 +356,8 @@ if "team_assignments" not in st.session_state:
     st.session_state.team_assignments = {}
 if "team_assignment_filter" not in st.session_state:
     st.session_state.team_assignment_filter = ""
+if "airport" not in st.session_state:
+    st.session_state.airport = DEFAULT_AIRPORT_CODE
 for state_key, default_value in DEFAULT_LABEL_FLAGS.items():
     if state_key not in st.session_state:
         st.session_state[state_key] = default_value
@@ -390,6 +413,10 @@ def _url_signature(params: dict[str, str]) -> tuple[tuple[str, str], ...]:
 def _read_url_state(params: dict[str, str]) -> dict:
     airlines = _normalize_csv_values(params.get("airlines"), upper=True)
     exclude_types = _normalize_csv_values(params.get("exclude_types"))
+    airport = str(params.get("airport", DEFAULT_AIRPORT_CODE)).strip().upper()
+    valid_airport_codes = {code for code, _ in AIRPORT_OPTIONS}
+    if airport not in valid_airport_codes:
+        airport = DEFAULT_AIRPORT_CODE
 
     label_flags = dict(DEFAULT_LABEL_FLAGS)
     if "labels" in params:
@@ -403,6 +430,7 @@ def _read_url_state(params: dict[str, str]) -> dict:
     return {
         "airlines": airlines,
         "exclude_types": exclude_types,
+        "airport": airport,
         "labels": label_flags,
         "time_basis": str(params.get("time_basis", DEFAULT_TIMELINE_VALUES["time_basis"])).strip().lower()
         if str(params.get("time_basis", DEFAULT_TIMELINE_VALUES["time_basis"])).strip().lower() in {"ground", "flight"}
@@ -473,6 +501,8 @@ def _apply_url_state(params: dict[str, str]) -> None:
     for state_key, enabled in url_state["labels"].items():
         st.session_state[state_key] = enabled
 
+    st.session_state.airport = url_state["airport"]
+
     for state_key in DEFAULT_TIMELINE_VALUES:
         st.session_state[state_key] = url_state[state_key]
 
@@ -482,6 +512,7 @@ def _apply_url_state(params: dict[str, str]) -> None:
 def _build_url_params(
     *,
     selected_airlines: list[str],
+    airport: str,
     type_preferences: dict[str, bool],
     show_flt: bool,
     show_des_org: bool,
@@ -502,6 +533,8 @@ def _build_url_params(
 
     if selected_airlines != ["ESR"]:
         params["airlines"] = ",".join(selected_airlines)
+    if str(airport).strip().upper() != DEFAULT_AIRPORT_CODE:
+        params["airport"] = str(airport).strip().upper()
 
     excluded_types = sorted(
         aircraft_type
@@ -558,6 +591,10 @@ def _prev_day() -> None:
 def _next_day() -> None:
     _normalize_base_date()
     st.session_state.base_date = st.session_state.base_date + timedelta(days=1)
+
+
+def _today_kst() -> None:
+    st.session_state.base_date = datetime.now(ZoneInfo("Asia/Seoul")).date()
 
 
 def _request_refresh() -> None:
@@ -1261,11 +1298,27 @@ if "flight_lookup_time_basis" not in st.session_state or st.session_state.flight
     st.session_state.flight_lookup_time_basis = st.session_state.time_basis
 
 st.sidebar.date_input("Date", key="base_date", label_visibility="collapsed")
-date_nav_col1, date_nav_col2 = st.sidebar.columns(2, gap="small")
+st.sidebar.markdown(
+    """
+    <style>
+    div[data-testid="stSidebar"] .st-key-btn_prev_day button,
+    div[data-testid="stSidebar"] .st-key-btn_today_kst button,
+    div[data-testid="stSidebar"] .st-key-btn_next_day button {
+        font-size: 1.15rem;
+        line-height: 1;
+        font-weight: 600;
+    }
+    </style>
+    """,
+    unsafe_allow_html=True,
+)
+date_nav_col1, date_nav_col2, date_nav_col3 = st.sidebar.columns(3, gap="small")
 with date_nav_col1:
-    st.button("◀ Prev", key="btn_prev_day", on_click=_prev_day, width="stretch")
+    st.button("◀", key="btn_prev_day", on_click=_prev_day, width="stretch")
 with date_nav_col2:
-    st.button("Next ▶", key="btn_next_day", on_click=_next_day, width="stretch")
+    st.button("◉", key="btn_today_kst", on_click=_today_kst, width="stretch")
+with date_nav_col3:
+    st.button("▶", key="btn_next_day", on_click=_next_day, width="stretch")
 
 base_date = st.session_state.base_date
 if isinstance(base_date, datetime):
@@ -1360,8 +1413,14 @@ turnaround_limit_min = st.sidebar.number_input(
 st.sidebar.caption("Maximum allowed time for a Turn-around connection from Arrival to the next Departure.")
 
 st.sidebar.markdown("---")
-departure_airport = st.sidebar.text_input("Departure airport", value="RKSI").strip().upper()
-arrival_airport = st.sidebar.text_input("Arrival airport", value="RKSI").strip().upper()
+airport = st.sidebar.selectbox(
+    "Airport",
+    options=[code for code, _ in AIRPORT_OPTIONS],
+    format_func=lambda code: AIRPORT_LABELS.get(code, code),
+    key="airport",
+)
+departure_airport = str(airport).strip().upper() or DEFAULT_AIRPORT_CODE
+arrival_airport = departure_airport
 
 st.title(f"Flight Schedule ({base_date.strftime('%Y-%m-%d')})")
 
@@ -1372,8 +1431,8 @@ if not selected_airlines:
 query = UbikaisQuery(
     flight_date=base_date,
     airline=selected_airlines[0],
-    departure_airport=departure_airport or "RKSI",
-    arrival_airport=arrival_airport or "RKSI",
+    departure_airport=departure_airport or DEFAULT_AIRPORT_CODE,
+    arrival_airport=arrival_airport or DEFAULT_AIRPORT_CODE,
 )
 refresh_data = bool(st.session_state.get("_force_refresh", False))
 should_refresh = refresh_data
@@ -1440,6 +1499,18 @@ available_types = sorted(
         if pd.notna(value) and str(value).strip()
     }
 )
+aircraft_type_counts = {
+    str(aircraft_type): int(count)
+    for aircraft_type, count in pd.concat(
+        [dep_df.get("TYP", pd.Series(dtype=str)), arr_df.get("TYP", pd.Series(dtype=str))]
+    )
+    .dropna()
+    .astype(str)
+    .str.strip()
+    .loc[lambda values: values != ""]
+    .value_counts()
+    .items()
+}
 
 with type_filter_slot.container():
     type_preferences = st.session_state.aircraft_type_preferences
@@ -1474,7 +1545,8 @@ with type_filter_slot.container():
                 with st.container(key="aircraft_type_list"):
                     for aircraft_type in available_types:
                         state_key = _aircraft_type_widget_key(aircraft_type)
-                        st.checkbox(aircraft_type, key=state_key)
+                        type_count = aircraft_type_counts.get(aircraft_type, 0)
+                        st.checkbox(f"{aircraft_type} ({type_count})", key=state_key)
 
                 action_col1, action_col2 = st.columns(2, gap="small")
                 with action_col1:
@@ -1525,6 +1597,7 @@ arr_df = _attach_team_assignments(arr_df, base_date, "arr")
 
 desired_url_params = _build_url_params(
     selected_airlines=selected_airlines,
+    airport=airport,
     type_preferences=type_preferences,
     show_flt=show_flt,
     show_des_org=show_des_org,

@@ -17,8 +17,11 @@ ENDPOINTS: dict[Direction, str] = {
     "dep": "selectDep.fois",
     "arr": "selectArr.fois",
 }
-RECENT_CACHE_TTL_SECONDS = 30 * 60
-DEFAULT_CACHE_TTL_SECONDS = 12 * 60 * 60
+TODAY_TTL_SECONDS = 30 * 60
+TOMORROW_TTL_SECONDS = 30 * 60
+FUTURE_TTL_SECONDS = 24 * 60 * 60
+POST_CUTOFF_PAST_TTL_SECONDS = 7 * 24 * 60 * 60
+CUTOFF_HOUR_KST = 6
 KST = timezone(timedelta(hours=9))
 
 
@@ -49,9 +52,8 @@ def fetch_records(
     cookie_header: Optional[str] = None,
 ) -> dict[str, Any]:
     cache_path = _cache_path(cache_dir, direction, query)
-    cache_ttl_seconds = _cache_ttl_seconds_for_date(query.flight_date)
     if cache_path.exists() and not refresh:
-        cached_payload = _load_cache_if_fresh(cache_path, cache_ttl_seconds)
+        cached_payload = _load_cache_if_fresh(cache_path, query.flight_date)
         if cached_payload is not None:
             return cached_payload
 
@@ -197,7 +199,7 @@ def _cache_path(cache_dir: Union[str, Path], direction: Direction, query: Ubikai
     return Path(cache_dir) / filename
 
 
-def _load_cache_if_fresh(cache_path: Path, ttl_seconds: int) -> Optional[dict[str, Any]]:
+def _load_cache_if_fresh(cache_path: Path, flight_date: date) -> Optional[dict[str, Any]]:
     try:
         payload = json.loads(cache_path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
@@ -211,20 +213,52 @@ def _load_cache_if_fresh(cache_path: Path, ttl_seconds: int) -> Optional[dict[st
             return None
 
     try:
-        age_seconds = time.time() - float(fetched_at)
+        fetched_at_utc = datetime.fromtimestamp(float(fetched_at), tz=timezone.utc)
     except (TypeError, ValueError):
         return None
 
+    now_kst = datetime.now(KST)
+    fetched_at_kst = fetched_at_utc.astimezone(KST)
+    ttl_seconds = _cache_ttl_seconds_for_date(flight_date, now_kst=now_kst, fetched_at_kst=fetched_at_kst)
+
+    if ttl_seconds is None:
+        return None
+
+    age_seconds = (now_kst - fetched_at_kst).total_seconds()
     if age_seconds <= ttl_seconds:
         return payload
     return None
 
 
-def _cache_ttl_seconds_for_date(flight_date: date) -> int:
-    today_kst = datetime.now(KST).date()
-    if abs((flight_date - today_kst).days) <= 1:
-        return RECENT_CACHE_TTL_SECONDS
-    return DEFAULT_CACHE_TTL_SECONDS
+def _cache_ttl_seconds_for_date(
+    flight_date: date,
+    *,
+    now_kst: datetime,
+    fetched_at_kst: datetime,
+) -> Optional[int]:
+    today_kst = now_kst.date()
+    delta_days = (flight_date - today_kst).days
+
+    if delta_days == 0:
+        return TODAY_TTL_SECONDS
+    if delta_days == 1:
+        return TOMORROW_TTL_SECONDS
+    if delta_days >= 2:
+        return FUTURE_TTL_SECONDS
+
+    cutoff_kst = datetime.combine(
+        flight_date + timedelta(days=1),
+        datetime.min.time(),
+        tzinfo=KST,
+    ) + timedelta(hours=CUTOFF_HOUR_KST)
+
+    if now_kst < cutoff_kst:
+        return TODAY_TTL_SECONDS
+
+    if fetched_at_kst < cutoff_kst:
+        return None
+
+    return POST_CUTOFF_PAST_TTL_SECONDS
 
 def _serialize_query(query: UbikaisQuery) -> dict[str, Any]:
     raw = asdict(query)
