@@ -1301,9 +1301,7 @@ st.sidebar.date_input("Date", key="base_date", label_visibility="collapsed")
 st.sidebar.markdown(
     """
     <style>
-    div[data-testid="stSidebar"] .st-key-btn_prev_day button,
-    div[data-testid="stSidebar"] .st-key-btn_today_kst button,
-    div[data-testid="stSidebar"] .st-key-btn_next_day button {
+    div[data-testid="stSidebar"] .st-key-sidebar_date_nav button {
         font-size: 1.15rem;
         line-height: 1;
         font-weight: 600;
@@ -1312,13 +1310,14 @@ st.sidebar.markdown(
     """,
     unsafe_allow_html=True,
 )
-date_nav_col1, date_nav_col2, date_nav_col3 = st.sidebar.columns(3, gap="small")
-with date_nav_col1:
-    st.button("◀", key="btn_prev_day", on_click=_prev_day, width="stretch")
-with date_nav_col2:
-    st.button("◉", key="btn_today_kst", on_click=_today_kst, width="stretch")
-with date_nav_col3:
-    st.button("▶", key="btn_next_day", on_click=_next_day, width="stretch")
+with st.sidebar.container(key="sidebar_date_nav"):
+    date_nav_col1, date_nav_col2, date_nav_col3 = st.columns(3, gap="small")
+    with date_nav_col1:
+        st.button("◀", key="btn_prev_day", on_click=_prev_day, width="stretch")
+    with date_nav_col2:
+        st.button("◉", key="btn_today_kst", on_click=_today_kst, width="stretch")
+    with date_nav_col3:
+        st.button("▶", key="btn_next_day", on_click=_next_day, width="stretch")
 
 base_date = st.session_state.base_date
 if isinstance(base_date, datetime):
@@ -1799,12 +1798,15 @@ with content_main:
                         arr_df = _attach_team_assignments(arr_df, base_date, "arr")
                         fig, summary = build_timeline_figure(dep_df, arr_df, config)
         airline_tag = selected_airlines[0] if len(selected_airlines) == 1 else f"{selected_airlines[0]}_plus{len(selected_airlines) - 1}"
-        chart_name = (
-            f"{base_date.strftime('%Y-%m-%d')}_{airline_tag}_D{summary['total_dep']}_A{summary['total_arr']}.png"
-        )
-        buffer = io.BytesIO()
-        fig.savefig(buffer, format="png", dpi=200, bbox_inches="tight")
-        buffer.seek(0)
+        chart_stem = f"{base_date.strftime('%Y-%m-%d')}_{airline_tag}_D{summary['total_dep']}_A{summary['total_arr']}"
+        png_name = f"{chart_stem}.png"
+        pdf_name = f"{chart_stem}.pdf"
+        png_buffer = io.BytesIO()
+        fig.savefig(png_buffer, format="png", dpi=400, bbox_inches="tight")
+        png_buffer.seek(0)
+        pdf_buffer = io.BytesIO()
+        fig.savefig(pdf_buffer, format="pdf", bbox_inches="tight")
+        pdf_buffer.seek(0)
 
         with chart_container:
             st.pyplot(fig, width="content")
@@ -1824,26 +1826,45 @@ with content_main:
                 with refresh_col:
                     st.button("Refresh", key="refresh_main_button", width="stretch", on_click=_request_refresh)
                 with download_col:
-                    st.download_button(
-                        label="Download PNG",
-                        data=buffer,
-                        file_name=chart_name,
-                        mime="image/png",
-                        width="stretch",
-                    )
+                    with st.popover("Download", width="stretch", key="download_popover_desktop"):
+                        st.download_button(
+                            label="PNG",
+                            data=png_buffer,
+                            file_name=png_name,
+                            mime="image/png",
+                            width="stretch",
+                            key="download_png_desktop",
+                        )
+                        st.download_button(
+                            label="PDF",
+                            data=pdf_buffer,
+                            file_name=pdf_name,
+                            mime="application/pdf",
+                            width="stretch",
+                            key="download_pdf_desktop",
+                        )
         with mobile_action_container:
             with st.container(key="mobile_action_set"):
                 st.button("Next day", key="btn_next_day_mobile", on_click=_next_day, width="stretch")
                 st.button("Previous day", key="btn_prev_day_mobile", on_click=_prev_day, width="stretch")
                 st.button("Refresh", key="refresh_main_button_mobile", width="stretch", on_click=_request_refresh)
-                st.download_button(
-                    label="Download PNG",
-                    data=buffer,
-                    file_name=chart_name,
-                    mime="image/png",
-                    key="download_png_mobile",
-                    width="stretch",
-                )
+                with st.popover("Download", width="stretch", key="download_popover_mobile"):
+                    st.download_button(
+                        label="PNG",
+                        data=png_buffer,
+                        file_name=png_name,
+                        mime="image/png",
+                        key="download_png_mobile",
+                        width="stretch",
+                    )
+                    st.download_button(
+                        label="PDF",
+                        data=pdf_buffer,
+                        file_name=pdf_name,
+                        mime="application/pdf",
+                        key="download_pdf_mobile",
+                        width="stretch",
+                    )
         with st.expander("Flight schedule lookup"):
             with st.form("flight_lookup_form", border=False, enter_to_submit=False):
                 lookup_col1, lookup_col2 = st.columns(2, gap="small")

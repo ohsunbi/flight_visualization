@@ -193,7 +193,7 @@ def build_timeline_figure(
     ax.text(
         0.99,
         1.02,
-        f"Total Departure: {total_dep}   Total Arrival: {total_arr}",
+        f"Departure: {total_dep}   Arrival: {total_arr}",
         transform=ax.transAxes,
         ha="right",
         va="bottom",
