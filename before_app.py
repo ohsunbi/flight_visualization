@@ -13,6 +13,7 @@ import matplotlib.pyplot as plt
 import pandas as pd
 import streamlit as st
 
+from airport_codes import icao_to_iata
 from flight_timeline import (
     TimelineConfig,
     arrivals_from_ubikais,
@@ -352,6 +353,12 @@ if "flight_lookup_direction" not in st.session_state:
     st.session_state.flight_lookup_direction = None
 if "flight_lookup_result" not in st.session_state:
     st.session_state.flight_lookup_result = None
+if "flight_compare_base_date" not in st.session_state:
+    st.session_state.flight_compare_base_date = st.session_state.base_date
+if "flight_compare_comparison_date" not in st.session_state:
+    st.session_state.flight_compare_comparison_date = st.session_state.base_date + timedelta(days=1)
+if "flight_compare_result" not in st.session_state:
+    st.session_state.flight_compare_result = None
 if "team_assignments" not in st.session_state:
     st.session_state.team_assignments = {}
 if "team_assignment_filter" not in st.session_state:
@@ -1288,6 +1295,184 @@ def _merge_service_day_payload(
     }
 
 
+def _coerce_date_value(value: object) -> date:
+    if isinstance(value, datetime):
+        return value.date()
+    if isinstance(value, date):
+        return value
+    return datetime.strptime(str(value), "%Y-%m-%d").date()
+
+
+def _comparison_scheduled_time(direction: str, record: dict) -> str:
+    key = "schTime" if direction == "dep" else "sta"
+    return _compact_hhmm(record.get(key))
+
+
+def _comparison_flight_code(record: dict) -> str:
+    return str(record.get("fpId", "")).strip().upper()
+
+
+def _comparison_key(direction: str, record: dict) -> Optional[tuple[str, str]]:
+    flight_code = _comparison_flight_code(record)
+    if not flight_code:
+        return None
+
+    return str(direction).strip().lower(), flight_code
+
+
+def _comparison_sort_value(direction: str, record: dict) -> tuple[str, str, str]:
+    return (
+        _comparison_flight_code(record),
+        "0" if direction == "arr" else "1",
+        _comparison_scheduled_time(direction, record) or "9999",
+    )
+
+
+def _comparison_record_row(direction: str, record: dict) -> dict[str, str]:
+    if direction == "dep":
+        return {
+            "Type": "DEP",
+            "Flight": _comparison_flight_code(record),
+            "STD/STA": _compact_hhmm(record.get("schTime")),
+            "ORG/DES": icao_to_iata(str(record.get("apArr", "")).strip()),
+        }
+
+    return {
+        "Type": "ARR",
+        "Flight": _comparison_flight_code(record),
+        "STD/STA": _compact_hhmm(record.get("sta")),
+        "ORG/DES": icao_to_iata(str(record.get("apIcao", "")).strip()),
+    }
+
+
+def _comparison_record_map(
+    *,
+    direction: str,
+    records: list[dict],
+) -> dict[tuple[str, ...], dict[str, object]]:
+    mapped_records: dict[tuple[str, ...], dict[str, object]] = {}
+
+    for record in sorted(records, key=lambda item: _comparison_sort_value(direction, item)):
+        key = _comparison_key(direction, record)
+        if key is None or key in mapped_records:
+            continue
+
+        mapped_records[key] = {
+            "sort": _comparison_sort_value(direction, record),
+            "row": _comparison_record_row(direction, record),
+        }
+
+    return mapped_records
+
+
+def _fetch_comparison_service_day_records(
+    *,
+    flight_date: date,
+    direction: str,
+    selected_airlines: list[str],
+    departure_airport: str,
+    arrival_airport: str,
+    time_basis: str,
+    service_start_hour: int,
+) -> list[dict]:
+    query = UbikaisQuery(
+        flight_date=flight_date,
+        airline=selected_airlines[0],
+        departure_airport=departure_airport or DEFAULT_AIRPORT_CODE,
+        arrival_airport=arrival_airport or DEFAULT_AIRPORT_CODE,
+    )
+    base_payload = fetch_records_for_airlines(direction, query, selected_airlines, refresh=False)
+
+    next_payload = None
+    if int(service_start_hour) > 0:
+        next_payload = fetch_records_for_airlines(
+            direction,
+            replace(query, flight_date=flight_date + timedelta(days=1)),
+            selected_airlines,
+            refresh=False,
+        )
+
+    merged_payload = _merge_service_day_payload(
+        direction=direction,
+        base_payload=base_payload,
+        next_payload=next_payload,
+        time_basis=time_basis,
+        service_start_hour=int(service_start_hour),
+    )
+    return list(merged_payload.get("records") or [])
+
+
+def _build_schedule_comparison(
+    *,
+    base_date: date,
+    comparison_date: date,
+    selected_airlines: list[str],
+    departure_airport: str,
+    arrival_airport: str,
+    time_basis: str,
+    service_start_hour: int,
+) -> dict[str, object]:
+    base_records_by_key: dict[tuple[str, ...], dict[str, object]] = {}
+    comparison_records_by_key: dict[tuple[str, ...], dict[str, object]] = {}
+
+    for direction in ("dep", "arr"):
+        base_records = _fetch_comparison_service_day_records(
+            flight_date=base_date,
+            direction=direction,
+            selected_airlines=selected_airlines,
+            departure_airport=departure_airport,
+            arrival_airport=arrival_airport,
+            time_basis=time_basis,
+            service_start_hour=service_start_hour,
+        )
+        comparison_records = _fetch_comparison_service_day_records(
+            flight_date=comparison_date,
+            direction=direction,
+            selected_airlines=selected_airlines,
+            departure_airport=departure_airport,
+            arrival_airport=arrival_airport,
+            time_basis=time_basis,
+            service_start_hour=service_start_hour,
+        )
+
+        base_records_by_key.update(
+            _comparison_record_map(
+                direction=direction,
+                records=base_records,
+            )
+        )
+        comparison_records_by_key.update(
+            _comparison_record_map(
+                direction=direction,
+                records=comparison_records,
+            )
+        )
+
+    base_keys = set(base_records_by_key)
+    comparison_keys = set(comparison_records_by_key)
+    added_keys = sorted(
+        comparison_keys - base_keys,
+        key=lambda key: comparison_records_by_key[key]["sort"],
+    )
+    missing_keys = sorted(
+        base_keys - comparison_keys,
+        key=lambda key: base_records_by_key[key]["sort"],
+    )
+
+    return {
+        "base_date": base_date,
+        "comparison_date": comparison_date,
+        "airlines": list(selected_airlines),
+        "airport": departure_airport,
+        "time_basis": time_basis,
+        "service_start_hour": int(service_start_hour),
+        "base_total": len(base_records_by_key),
+        "comparison_total": len(comparison_records_by_key),
+        "added_rows": [comparison_records_by_key[key]["row"] for key in added_keys],
+        "missing_rows": [base_records_by_key[key]["row"] for key in missing_keys],
+    }
+
+
 current_url_params = st.query_params.to_dict()
 current_url_signature = _url_signature(current_url_params)
 if st.session_state["_applied_url_signature"] != current_url_signature:
@@ -1865,6 +2050,68 @@ with content_main:
                         key="download_pdf_mobile",
                         width="stretch",
                     )
+        with st.expander("Flight schedule comparison"):
+            with st.form("flight_compare_form", border=False, enter_to_submit=False):
+                compare_date_col1, compare_date_col2 = st.columns(2, gap="small")
+                with compare_date_col1:
+                    st.date_input("Base date", key="flight_compare_base_date")
+                with compare_date_col2:
+                    st.date_input("Comparison date", key="flight_compare_comparison_date")
+
+                compare_schedule = st.form_submit_button("Compare", type="primary", width="stretch")
+
+            if compare_schedule:
+                st.session_state.flight_compare_result = None
+                comparison_base_date = _coerce_date_value(st.session_state.flight_compare_base_date)
+                comparison_target_date = _coerce_date_value(st.session_state.flight_compare_comparison_date)
+
+                with st.spinner("Comparing schedules..."):
+                    try:
+                        st.session_state.flight_compare_result = _build_schedule_comparison(
+                            base_date=comparison_base_date,
+                            comparison_date=comparison_target_date,
+                            selected_airlines=selected_airlines,
+                            departure_airport=query.departure_airport,
+                            arrival_airport=query.arrival_airport,
+                            time_basis=str(time_basis),
+                            service_start_hour=int(service_start_hour),
+                        )
+                    except Exception as exc:
+                        st.error(f"Schedule comparison failed: {exc}")
+
+            comparison_result = st.session_state.get("flight_compare_result")
+            if comparison_result:
+                compare_summary_col1, compare_summary_col2, compare_summary_col3, compare_summary_col4 = st.columns(
+                    4,
+                    gap="small",
+                )
+                with compare_summary_col1:
+                    st.metric("Base flights", comparison_result["base_total"])
+                with compare_summary_col2:
+                    st.metric("Comparison flights", comparison_result["comparison_total"])
+                with compare_summary_col3:
+                    st.metric("Added", len(comparison_result["added_rows"]))
+                with compare_summary_col4:
+                    st.metric("Missing", len(comparison_result["missing_rows"]))
+
+                st.caption(
+                    f"{comparison_result['base_date'].strftime('%Y-%m-%d')} -> "
+                    f"{comparison_result['comparison_date'].strftime('%Y-%m-%d')} | "
+                    f"DEP/ARR | airlines {', '.join(comparison_result['airlines'])} | "
+                    f"airport {comparison_result['airport']} | aircraft type filter ignored"
+                )
+
+                st.markdown("**Added on comparison date**")
+                if comparison_result["added_rows"]:
+                    st.dataframe(pd.DataFrame(comparison_result["added_rows"]), width="stretch", hide_index=True)
+                else:
+                    st.info("No added flights found.")
+
+                st.markdown("**Missing on comparison date**")
+                if comparison_result["missing_rows"]:
+                    st.dataframe(pd.DataFrame(comparison_result["missing_rows"]), width="stretch", hide_index=True)
+                else:
+                    st.info("No missing flights found.")
         with st.expander("Flight schedule lookup"):
             with st.form("flight_lookup_form", border=False, enter_to_submit=False):
                 lookup_col1, lookup_col2 = st.columns(2, gap="small")
