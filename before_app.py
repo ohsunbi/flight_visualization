@@ -1,27 +1,5 @@
 from __future__ import annotations
 
-import faulthandler
-import sys
-from importlib.metadata import PackageNotFoundError, version
-
-faulthandler.enable(file=sys.stderr, all_threads=True)
-
-print("=" * 60, flush=True)
-print(f"Python: {sys.version}", flush=True)
-print(f"Executable: {sys.executable}", flush=True)
-
-for package_name in ("streamlit", "pandas", "pyarrow", "numpy", "matplotlib"):
-    try:
-        package_version = version(package_name)
-    except PackageNotFoundError:
-        package_version = "NOT INSTALLED"
-
-    print(f"{package_name}: {package_version}", flush=True)
-
-print("=" * 60, flush=True)
-
-
-
 import io
 import math
 import statistics
@@ -1918,6 +1896,16 @@ with content_main:
                         st.caption("No flights match the current filter.")
                     filtered_editor_df = None
 
+                visible_flights = list(filtered_editor_df.index) if filtered_editor_df is not None else []
+                editor_signature = (
+                    f"{len(visible_flights)}::"
+                    f"{visible_flights[0] if visible_flights else ''}::"
+                    f"{visible_flights[-1] if visible_flights else ''}"
+                )
+                team_editor_key = (
+                    f"team_assignment_editor::{base_date.isoformat()}::{editor_signature}"
+                )
+
                 if filtered_editor_df is not None:
                     flt_to_team_keys = {
                         str(flt): [str(key) for key in (team_keys or []) if str(key)]
@@ -1936,7 +1924,7 @@ with content_main:
                         }
                         existing_values.discard("")
                         current_team = next(iter(existing_values), "")
-                        single_team_key = f"team_memo_input::{base_date.isoformat()}::{flight_code}"
+                        single_team_key = f"single_team_input::{base_date.isoformat()}::{flight_code}"
                         if single_team_key not in st.session_state:
                             st.session_state[single_team_key] = current_team
 
@@ -1956,57 +1944,42 @@ with content_main:
                                     updated_assignments.pop(str(team_key), None)
                             assignment_changed = True
                     else:
+                        editor_view_df = (
+                            filtered_editor_df.drop(columns=["TEAM_KEYS"])
+                            .reset_index()
+                            .rename(columns={"Team": "Memo"})
+                        )
                         with editor_col:
-                            memo_grid = st.container(
-                                height=min(220, 42 + len(filtered_editor_df) * 46),
-                                border=False,
+                            edited_team_df = st.data_editor(
+                                editor_view_df,
+                                hide_index=True,
+                                width="stretch",
+                                height=min(160, 52 + max(1, len(editor_view_df)) * 38),
+                                column_order=["FLT", "Memo"],
+                                disabled=["FLT"],
+                                key=team_editor_key,
                             )
-                            with memo_grid:
-                                header_flt_col, header_memo_col = st.columns([1.1, 1.6], gap="small")
-                                header_flt_col.caption("FLT")
-                                header_memo_col.caption("Memo")
 
-                                for flight_code in filtered_editor_df.index:
-                                    flight_code = str(flight_code).strip()
-                                    team_keys = flt_to_team_keys.get(flight_code, [])
-                                    existing_values = {
-                                        _normalize_team_text(current_assignments.get(team_key, ""))
-                                        for team_key in team_keys
-                                    }
-                                    existing_values.discard("")
-                                    current_team = next(iter(existing_values), "")
-                                    memo_input_key = (
-                                        f"team_memo_input::{base_date.isoformat()}::{flight_code}"
-                                    )
-                                    if memo_input_key not in st.session_state:
-                                        st.session_state[memo_input_key] = current_team
+                        for _, row in edited_team_df.iterrows():
+                            normalized_team = _normalize_team_text(row.get("Memo", ""))
+                            flight_code = str(row.get("FLT", "")).strip()
+                            team_keys = flt_to_team_keys.get(flight_code, [])
+                            existing_values = {
+                                _normalize_team_text(current_assignments.get(team_key, ""))
+                                for team_key in team_keys
+                            }
+                            existing_values.discard("")
+                            current_team = next(iter(existing_values), "")
 
-                                    flt_col, memo_col = st.columns([1.1, 1.6], gap="small")
-                                    with flt_col:
-                                        st.text_input(
-                                            "FLT",
-                                            value=flight_code,
-                                            disabled=True,
-                                            label_visibility="collapsed",
-                                            key=f"{memo_input_key}::flt",
-                                        )
-                                    with memo_col:
-                                        team_value = st.text_input(
-                                            "Memo",
-                                            label_visibility="collapsed",
-                                            key=memo_input_key,
-                                        )
+                            if normalized_team == current_team:
+                                continue
 
-                                    normalized_team = _normalize_team_text(team_value)
-                                    if normalized_team == current_team:
-                                        continue
-
-                                    for team_key in team_keys:
-                                        if normalized_team:
-                                            updated_assignments[str(team_key)] = normalized_team
-                                        else:
-                                            updated_assignments.pop(str(team_key), None)
-                                    assignment_changed = True
+                            for team_key in team_keys:
+                                if normalized_team:
+                                    updated_assignments[str(team_key)] = normalized_team
+                                else:
+                                    updated_assignments.pop(str(team_key), None)
+                            assignment_changed = True
 
                     if assignment_changed:
                         st.session_state.team_assignments = updated_assignments
