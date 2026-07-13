@@ -1,3 +1,20 @@
+import faulthandler
+import sys
+
+faulthandler.enable(file=sys.stderr, all_threads=True)
+
+print("STEP 1: app started", flush=True)
+
+import streamlit as st
+print("STEP 2: streamlit imported", flush=True)
+
+import pandas as pd
+print("STEP 3: pandas imported", flush=True)
+
+st.write("테스트 앱 실행 중")
+print("STEP 4: page rendered", flush=True)
+
+
 from __future__ import annotations
 
 import io
