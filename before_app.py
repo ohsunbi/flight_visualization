@@ -1,20 +1,21 @@
 from __future__ import annotations
 
-import faulthandler
 import sys
+from importlib.metadata import PackageNotFoundError, version
 
-faulthandler.enable(file=sys.stderr, all_threads=True)
+print("=" * 60, flush=True)
+print(f"Python: {sys.version}", flush=True)
+print(f"Executable: {sys.executable}", flush=True)
 
-print("STEP 1: app started", flush=True)
+for package_name in ("streamlit", "pandas", "pyarrow", "numpy", "matplotlib"):
+    try:
+        package_version = version(package_name)
+    except PackageNotFoundError:
+        package_version = "NOT INSTALLED"
 
-import streamlit as st
-print("STEP 2: streamlit imported", flush=True)
+    print(f"{package_name}: {package_version}", flush=True)
 
-import pandas as pd
-print("STEP 3: pandas imported", flush=True)
-
-st.write("테스트 앱 실행 중")
-print("STEP 4: page rendered", flush=True)
+print("=" * 60, flush=True)
 
 
 
