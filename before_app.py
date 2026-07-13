@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import faulthandler
 import sys
 
@@ -15,7 +17,6 @@ st.write("테스트 앱 실행 중")
 print("STEP 4: page rendered", flush=True)
 
 
-from __future__ import annotations
 
 import io
 import math
