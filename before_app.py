@@ -2000,20 +2000,24 @@ with content_main:
                         st.session_state.team_assignments = updated_assignments
                         dep_df = _attach_team_assignments(dep_df, base_date, "dep")
                         arr_df = _attach_team_assignments(arr_df, base_date, "arr")
+                        plt.close(fig)
                         fig, summary = build_timeline_figure(dep_df, arr_df, config)
         airline_tag = selected_airlines[0] if len(selected_airlines) == 1 else f"{selected_airlines[0]}_plus{len(selected_airlines) - 1}"
         chart_stem = f"{base_date.strftime('%Y-%m-%d')}_{airline_tag}_D{summary['total_dep']}_A{summary['total_arr']}"
         png_name = f"{chart_stem}.png"
         pdf_name = f"{chart_stem}.pdf"
-        png_buffer = io.BytesIO()
-        fig.savefig(png_buffer, format="png", dpi=400, bbox_inches="tight")
-        png_buffer.seek(0)
-        pdf_buffer = io.BytesIO()
-        fig.savefig(pdf_buffer, format="pdf", bbox_inches="tight")
-        pdf_buffer.seek(0)
+        try:
+            png_buffer = io.BytesIO()
+            fig.savefig(png_buffer, format="png", dpi=400, bbox_inches="tight")
+            png_buffer.seek(0)
+            pdf_buffer = io.BytesIO()
+            fig.savefig(pdf_buffer, format="pdf", bbox_inches="tight")
+            pdf_buffer.seek(0)
 
-        with chart_container:
-            st.pyplot(fig, width="content")
+            with chart_container:
+                st.pyplot(fig, width="content")
+        finally:
+            plt.close(fig)
         with fetched_container:
             st.markdown(
                 f"""
