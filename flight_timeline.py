@@ -1,15 +1,16 @@
 from __future__ import annotations
 
 import math
+import threading
 from dataclasses import dataclass
 from datetime import date, datetime, time, timedelta
 from typing import Any
 
 import matplotlib.dates as mdates
-import matplotlib.pyplot as plt
 import pandas as pd
 from matplotlib import transforms
 from matplotlib import font_manager
+from matplotlib.figure import Figure
 
 from airport_codes import icao_to_iata
 
@@ -23,6 +24,11 @@ A4_LANDSCAPE_HEIGHT = 8.27
 
 COL_ARR = "#1f77b4"
 COL_DEP = "#d62728"
+
+# Streamlit can start a rerun while the previous run is still finishing a
+# Matplotlib render. Matplotlib's renderer and font manager are not thread-safe,
+# so all figure construction/serialization must share this module-level lock.
+MATPLOTLIB_RENDER_LOCK = threading.RLock()
 
 def _resolve_team_badge_font_families() -> list[str]:
     available_families = {font.name for font in font_manager.fontManager.ttflist}
@@ -105,6 +111,15 @@ def build_timeline_figure(
     arr_df: pd.DataFrame,
     config: TimelineConfig,
 ):
+    with MATPLOTLIB_RENDER_LOCK:
+        return _build_timeline_figure(dep_df, arr_df, config)
+
+
+def _build_timeline_figure(
+    dep_df: pd.DataFrame,
+    arr_df: pd.DataFrame,
+    config: TimelineConfig,
+):
     dep_plot = _prepare_departures(dep_df, config)
     arr_plot = _prepare_arrivals(arr_df, config)
 
@@ -176,7 +191,8 @@ def build_timeline_figure(
     plot_rows = max(rows_per_panel, int(max(display_row_candidates, default=rows_per_panel - 1)) + 1)
 
     fig_height = max(A4_LANDSCAPE_HEIGHT, plot_rows * 0.28 + 3.0)
-    fig, ax = plt.subplots(figsize=(A4_LANDSCAPE_WIDTH, fig_height))
+    fig = Figure(figsize=(A4_LANDSCAPE_WIDTH, fig_height))
+    ax = fig.subplots()
     fig.subplots_adjust(left=0.04, right=0.98, top=0.90, bottom=0.18)
 
     ax.set_title("Flight Handling Timeline")

@@ -1,7 +1,10 @@
 from __future__ import annotations
 
+import faulthandler
 import sys
 from importlib.metadata import PackageNotFoundError, version
+
+faulthandler.enable(file=sys.stderr, all_threads=True)
 
 print("=" * 60, flush=True)
 print(f"Python: {sys.version}", flush=True)
@@ -28,12 +31,16 @@ from html import escape
 from typing import Optional
 from zoneinfo import ZoneInfo
 
+import matplotlib
+
+matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import pandas as pd
 import streamlit as st
 
 from airport_codes import icao_to_iata
 from flight_timeline import (
+    MATPLOTLIB_RENDER_LOCK,
     TimelineConfig,
     arrivals_from_ubikais,
     build_timeline_figure,
@@ -2000,24 +2007,25 @@ with content_main:
                         st.session_state.team_assignments = updated_assignments
                         dep_df = _attach_team_assignments(dep_df, base_date, "dep")
                         arr_df = _attach_team_assignments(arr_df, base_date, "arr")
-                        plt.close(fig)
+                        fig.clear()
                         fig, summary = build_timeline_figure(dep_df, arr_df, config)
         airline_tag = selected_airlines[0] if len(selected_airlines) == 1 else f"{selected_airlines[0]}_plus{len(selected_airlines) - 1}"
         chart_stem = f"{base_date.strftime('%Y-%m-%d')}_{airline_tag}_D{summary['total_dep']}_A{summary['total_arr']}"
         png_name = f"{chart_stem}.png"
         pdf_name = f"{chart_stem}.pdf"
-        try:
-            png_buffer = io.BytesIO()
-            fig.savefig(png_buffer, format="png", dpi=400, bbox_inches="tight")
-            png_buffer.seek(0)
-            pdf_buffer = io.BytesIO()
-            fig.savefig(pdf_buffer, format="pdf", bbox_inches="tight")
-            pdf_buffer.seek(0)
+        with MATPLOTLIB_RENDER_LOCK:
+            try:
+                png_buffer = io.BytesIO()
+                fig.savefig(png_buffer, format="png", dpi=400, bbox_inches="tight")
+                png_buffer.seek(0)
+                pdf_buffer = io.BytesIO()
+                fig.savefig(pdf_buffer, format="pdf", bbox_inches="tight")
+                pdf_buffer.seek(0)
 
-            with chart_container:
-                st.pyplot(fig, width="content")
-        finally:
-            plt.close(fig)
+                with chart_container:
+                    st.pyplot(fig, width="content")
+            finally:
+                fig.clear()
         with fetched_container:
             st.markdown(
                 f"""
