@@ -20,9 +20,17 @@ from airport_codes import icao_to_iata
 from flight_timeline import (
     MATPLOTLIB_RENDER_LOCK,
     TimelineConfig,
+    _find_turnaround_pairs,
     arrivals_from_ubikais,
     build_timeline_figure,
     departures_from_ubikais,
+)
+from flight_assignments import (
+    apply_connection_order,
+    records_to_export_rows,
+    read_assignment_workbook,
+    read_workbook_frames,
+    workbook_bytes,
 )
 from ubikais_client import UbikaisQuery, fetch_records
 
@@ -163,6 +171,11 @@ st.markdown(
     div.st-key-main_panel {
         max-width: 1240px;
     }
+    div.st-key-timeline_layout {
+        max-width: 1760px;
+        margin-left: 0;
+        margin-right: 0;
+    }
     .summary-cards {
         display: flex;
         flex-wrap: wrap;
@@ -241,6 +254,25 @@ st.markdown(
         padding: 0.7rem 0.72rem;
         min-height: 108px;
         color: var(--text-color);
+    }
+    .team-assignment-page-total {
+        min-height: 2.5rem;
+        display: flex;
+        align-items: center;
+        color: var(--text-color);
+        opacity: 0.75;
+        white-space: nowrap;
+    }
+    .team-assignment-page-label {
+        min-height: 2.5rem;
+        display: flex;
+        align-items: center;
+        color: var(--text-color);
+        white-space: nowrap;
+    }
+    div[data-testid="stFormSubmitButton"] button,
+    div[data-testid="stButton"] button {
+        white-space: nowrap;
     }
     .flight-lookup-cell.is-empty {
         background: transparent;
@@ -365,8 +397,22 @@ if "flight_compare_result" not in st.session_state:
     st.session_state.flight_compare_result = None
 if "team_assignments" not in st.session_state:
     st.session_state.team_assignments = {}
-if "team_assignment_filter" not in st.session_state:
-    st.session_state.team_assignment_filter = ""
+if "assignment_workbook" not in st.session_state:
+    st.session_state.assignment_workbook = {}
+if "assignment_workbook_frames" not in st.session_state:
+    st.session_state.assignment_workbook_frames = {}
+if "assignment_export_bytes" not in st.session_state:
+    st.session_state.assignment_export_bytes = None
+if "assignment_export_date" not in st.session_state:
+    st.session_state.assignment_export_date = None
+if "assignment_upload_signature" not in st.session_state:
+    st.session_state.assignment_upload_signature = None
+if "team_assignment_page" not in st.session_state:
+    st.session_state.team_assignment_page = 0
+if "team_assignment_draft" not in st.session_state:
+    st.session_state.team_assignment_draft = {}
+if "team_assignment_draft_signature" not in st.session_state:
+    st.session_state.team_assignment_draft_signature = None
 if "airport" not in st.session_state:
     st.session_state.airport = DEFAULT_AIRPORT_CODE
 for state_key, default_value in DEFAULT_LABEL_FLAGS.items():
@@ -825,11 +871,43 @@ def _attach_team_assignments(df: pd.DataFrame, base_date: date, direction: str) 
         return assigned
 
     assignment_map = st.session_state.get("team_assignments", {})
+    workbook_rows = st.session_state.get("assignment_workbook", {}).get(base_date.isoformat(), [])
+    workbook_by_match: dict[str, list[dict[str, str]]] = {}
+    workbook_by_flt: dict[str, list[dict[str, str]]] = {}
+    for item in workbook_rows:
+        if item.get("match_key"):
+            workbook_by_match.setdefault(item["match_key"], []).append(item)
+        fallback_key = f"{item.get('direction', '').lower()}|{item.get('flt', '').upper()}"
+        workbook_by_flt.setdefault(fallback_key, []).append(item)
+
+    occurrence_by_flt: dict[str, int] = {}
+
+    def display_assignment(row: pd.Series) -> str:
+        team_key = str(row.get("TEAM_KEY", ""))
+        flt = _normalize_team_key_part(row.get("FLT", ""))
+        fallback_key = f"{direction.lower()}|{flt}"
+        occurrence = occurrence_by_flt.get(fallback_key, 0)
+        occurrence_by_flt[fallback_key] = occurrence + 1
+        candidates = workbook_by_match.get(team_key) or workbook_by_flt.get(fallback_key, [])
+        if candidates:
+            values = []
+            for item in candidates:
+                team = _normalize_team_text(item.get("assignment", ""))
+                task = _normalize_team_text(item.get("task_type", ""))
+                if not team:
+                    continue
+                label = f"{team} ({task})" if task else team
+                if label not in values:
+                    values.append(label)
+            if values:
+                return " / ".join(values)
+        return _normalize_team_text(assignment_map.get(team_key, ""))
+
     assigned["TEAM_KEY"] = assigned.apply(
         lambda row: _build_team_assignment_key(base_date, direction, row),
         axis=1,
     )
-    assigned["TEAM"] = assigned["TEAM_KEY"].map(lambda key: _normalize_team_text(assignment_map.get(key, "")))
+    assigned["TEAM"] = assigned.apply(display_assignment, axis=1)
     return assigned
 
 
@@ -839,12 +917,9 @@ def _build_team_assignment_editor_rows(
     arr_records: pd.DataFrame,
     base_date: date,
 ) -> list[dict[str, str]]:
-    grouped_rows: dict[str, dict[str, object]] = {}
+    rows: list[dict[str, object]] = []
 
-    for direction, direction_label, records in (
-        ("dep", "Departure", dep_records),
-        ("arr", "Arrival", arr_records),
-    ):
+    for direction, direction_label, records in (("dep", "DEP", dep_records), ("arr", "ARR", arr_records)):
         if records is None or records.empty:
             continue
 
@@ -854,33 +929,309 @@ def _build_team_assignment_editor_rows(
             display_flt = raw_flt.replace("ESR", "ZE")
             if not display_flt:
                 continue
-
-            existing = grouped_rows.get(display_flt)
-            current_team = _normalize_team_text(row.get("TEAM", ""))
-
-            if existing is None:
-                grouped_rows[display_flt] = {
+            rows.append(
+                {
+                    "ROW_ID": f"{direction}_{len(rows)}",
+                    "Time": str(row.get("time_str", "")),
+                    "Direction": direction_label,
                     "FLT": display_flt,
-                    "Team": current_team,
+                    "Connection": "",
+                    "Team": _normalize_team_text(row.get("TEAM", "")),
                     "TEAM_KEYS": [team_key],
+                    "_MATCH_KEY": team_key,
                     "_sort_time": row.get("marker"),
                 }
-                continue
+            )
 
-            existing["TEAM_KEYS"].append(team_key)
-            if not existing.get("Team") and current_team:
-                existing["Team"] = current_team
+    by_key = {str(item["_MATCH_KEY"]): item for item in rows}
+    connection_number = 0
+    connection_anchor: dict[str, object] = {}
+    connection_by_key: dict[str, str] = {}
+    turnaround_pairs = _find_turnaround_pairs(
+        dep_records,
+        arr_records,
+        timedelta(minutes=int(st.session_state.get("turnaround_limit_min", DEFAULT_TIMELINE_VALUES["turnaround_limit_min"]))),
+    )
+    for arr_index, dep_index in turnaround_pairs:
+        try:
+            arr_key = _build_team_assignment_key(base_date, "arr", arr_records.iloc[int(arr_index)])
+            dep_key = _build_team_assignment_key(base_date, "dep", dep_records.iloc[int(dep_index)])
+        except (IndexError, TypeError):
+            continue
+        if arr_key not in by_key or dep_key not in by_key:
+            continue
+        connection_number += 1
+        label = f"T/A-{connection_number:02d}"
+        connection_by_key[arr_key] = label
+        connection_by_key[dep_key] = label
+        markers = [by_key[key]["_sort_time"] for key in (arr_key, dep_key)]
+        connection_anchor[label] = min(markers)
 
-    rows = list(grouped_rows.values())
-    rows.sort(key=lambda item: (item.get("_sort_time"), item.get("FLT")))
+    for item in rows:
+        item["Connection"] = connection_by_key.get(str(item["_MATCH_KEY"]), "")
+        item["_group_anchor"] = connection_anchor.get(item["Connection"], item["_sort_time"])
+
+    rows.sort(key=lambda item: (item.get("_group_anchor"), item.get("Connection", ""), item.get("_sort_time"), item.get("Direction"), item.get("FLT")))
     return [
         {
+            "ROW_ID": str(item["ROW_ID"]),
+            "Time": str(item["Time"]),
+            "Direction": str(item["Direction"]),
             "FLT": str(item["FLT"]),
+            "Connection": str(item["Connection"]),
             "Team": str(item["Team"]),
             "TEAM_KEYS": list(item.get("TEAM_KEYS", [])),
         }
         for item in rows
     ]
+
+
+def _build_assignment_export_frame(
+    *,
+    dep_records: pd.DataFrame,
+    arr_records: pd.DataFrame,
+    flight_date: date,
+) -> pd.DataFrame:
+    existing = st.session_state.get("assignment_workbook", {}).get(flight_date.isoformat(), [])
+    frame = records_to_export_rows(
+        dep_records=dep_records,
+        arr_records=arr_records,
+        flight_date=flight_date,
+        existing_assignments=existing,
+        assignment_overrides=st.session_state.get("team_assignments", {}),
+    )
+    turnaround_pairs = _find_turnaround_pairs(
+        dep_records,
+        arr_records,
+        timedelta(minutes=int(st.session_state.get("turnaround_limit_min", DEFAULT_TIMELINE_VALUES["turnaround_limit_min"]))),
+    )
+    return apply_connection_order(
+        frame,
+        dep_records=dep_records,
+        arr_records=arr_records,
+        turnaround_pairs=turnaround_pairs,
+    )
+
+
+def _prepare_assignment_export(
+    *,
+    dep_records: pd.DataFrame,
+    arr_records: pd.DataFrame,
+    flight_date: date,
+) -> None:
+    """Replace only the visible date and prepare a complete workbook."""
+    current_date_key = flight_date.isoformat()
+    current_frame = _build_assignment_export_frame(
+        dep_records=dep_records,
+        arr_records=arr_records,
+        flight_date=flight_date,
+    )
+    frames = {
+        str(key): value.copy()
+        for key, value in st.session_state.get("assignment_workbook_frames", {}).items()
+    }
+    frames[current_date_key] = current_frame
+    st.session_state.assignment_workbook_frames = frames
+    st.session_state.assignment_export_bytes = workbook_bytes(date_frames=frames)
+    st.session_state.assignment_export_date = current_date_key
+
+
+def _render_team_assignment_editor(
+    *,
+    summary: dict[str, object],
+    base_date: date,
+    dep_df: pd.DataFrame,
+    arr_df: pd.DataFrame,
+    config: TimelineConfig,
+    fig,
+) -> None:
+    """Render the legacy quick team editor below the chart action row."""
+    with st.expander("Team assignment (quick edit)", expanded=True, width="stretch"):
+        team_editor_rows = _build_team_assignment_editor_rows(
+            dep_records=summary["dep_records"],
+            arr_records=summary["arr_records"],
+            base_date=base_date,
+        )
+        if not team_editor_rows:
+            st.caption("No visible flights to assign.")
+            return
+
+        editor_df = pd.DataFrame(team_editor_rows)
+        page_size = 15
+        page_count = max(1, math.ceil(len(editor_df) / page_size))
+        editor_signature = "::".join(
+            [base_date.isoformat(), *(str(row["ROW_ID"]) for row in team_editor_rows)]
+        )
+        if st.session_state.get("team_assignment_draft_signature") != editor_signature:
+            st.session_state.team_assignment_draft = dict(
+                st.session_state.get("team_assignments", {})
+            )
+            st.session_state.team_assignment_draft_signature = editor_signature
+
+        current_page = min(
+            int(st.session_state.get("team_assignment_page", 0)),
+            page_count - 1,
+        )
+        st.session_state.team_assignment_page = current_page
+        page_start = current_page * page_size
+        page_end = page_start + int(page_size)
+        page_editor_df = editor_df.iloc[page_start:page_end].copy()
+
+        draft_assignments = dict(st.session_state.get("team_assignment_draft", {}))
+        for index, row in page_editor_df.iterrows():
+            team_keys = row.get("TEAM_KEYS") or []
+            assigned_values = {
+                _normalize_team_text(draft_assignments.get(str(team_key), ""))
+                for team_key in team_keys
+            }
+            assigned_values.discard("")
+            page_editor_df.at[index, "Team"] = " / ".join(sorted(assigned_values))
+
+        def save_page_draft(edited_df: pd.DataFrame) -> dict[str, str]:
+            updated_draft = dict(st.session_state.get("team_assignment_draft", {}))
+            row_to_team_keys = {
+                str(row["ROW_ID"]): [
+                    str(key) for key in (row.get("TEAM_KEYS") or []) if str(key)
+                ]
+                for row in team_editor_rows
+            }
+            for _, row in edited_df.iterrows():
+                normalized_team = _normalize_team_text(
+                    row.get("Assign", row.get("Team", ""))
+                )
+                team_keys = row_to_team_keys.get(str(row.get("ROW_ID", "")).strip(), [])
+                for team_key in team_keys:
+                    if normalized_team:
+                        updated_draft[team_key] = normalized_team
+                    else:
+                        updated_draft.pop(team_key, None)
+            return updated_draft
+
+        editor_view_df = page_editor_df.drop(columns=["TEAM_KEYS"]).rename(columns={"Team": "Assign"})
+        visible_flights = list(page_editor_df["ROW_ID"])
+        visible_signature = (
+            f"{len(visible_flights)}::"
+            f"{visible_flights[0] if visible_flights else ''}::"
+            f"{visible_flights[-1] if visible_flights else ''}"
+        )
+        range_end = min(page_end, len(editor_df))
+        st.caption(f"Flights {page_start + 1}–{range_end} / {len(editor_df)}")
+
+        selector_key = f"team_assignment_page_selector::{base_date.isoformat()}"
+        sync_page = st.session_state.pop("team_assignment_page_selector_sync", None)
+        if sync_page is not None:
+            st.session_state[selector_key] = int(sync_page)
+        with st.form("team_assignment_form", clear_on_submit=False, enter_to_submit=False):
+            nav_columns = st.columns([1.35, 3.0, 2.65], gap="small")
+            with nav_columns[0]:
+                arrow_columns = st.columns(2, gap="small")
+                with arrow_columns[0]:
+                    previous_clicked = st.form_submit_button(
+                        "‹", disabled=current_page == 0, width="stretch"
+                    )
+                with arrow_columns[1]:
+                    next_clicked = st.form_submit_button(
+                        "›", disabled=current_page >= page_count - 1, width="stretch"
+                    )
+            with nav_columns[2]:
+                page_columns = st.columns([1.5, 1.3], gap="small")
+                with page_columns[0]:
+                    selected_page = st.selectbox(
+                        "페이지",
+                        options=list(range(page_count)),
+                        index=current_page,
+                        format_func=lambda page: str(page + 1),
+                        label_visibility="collapsed",
+                        key=selector_key,
+                    )
+                with page_columns[1]:
+                    move_clicked = st.form_submit_button("Go", width="stretch")
+
+            edited_team_df = st.data_editor(
+                editor_view_df,
+                hide_index=True,
+                width="stretch",
+                height=min(680, 90 + max(1, len(editor_view_df)) * 36),
+                column_order=["Time", "Direction", "FLT", "Connection", "Assign"],
+                disabled=["ROW_ID", "Time", "Direction", "FLT", "Connection"],
+                key=f"team_assignment_editor_v2::{base_date.isoformat()}::{visible_signature}",
+            )
+            submitted = st.form_submit_button("Apply", type="primary", width="stretch")
+
+        navigation_requested = previous_clicked or next_clicked or move_clicked
+        if not submitted and not navigation_requested:
+            return
+
+        if edited_team_df is not None:
+            st.session_state.team_assignment_draft = save_page_draft(edited_team_df)
+
+        if navigation_requested:
+            if previous_clicked:
+                target_page = current_page - 1
+            elif next_clicked:
+                target_page = current_page + 1
+            else:
+                target_page = int(selected_page)
+            target_page = max(0, min(target_page, page_count - 1))
+            st.session_state.team_assignment_page = target_page
+            st.session_state.team_assignment_page_selector_sync = target_page
+            st.rerun()
+
+        if submitted:
+            st.session_state.team_assignments = dict(
+                st.session_state.get("team_assignment_draft", {})
+            )
+            st.session_state.team_assignment_page = current_page
+            st.rerun()
+
+
+def _render_assignment_workbook_ui(*, base_date: date) -> None:
+    with st.expander("Flight assignment workbook", expanded=False):
+        st.caption(
+            "Upload the workbook you keep locally. Other date sheets are preserved. "
+            "Assignment and task type are retained across refreshes. Use Refresh first "
+            "when the current date needs fresh Ubikais data."
+        )
+        uploaded_assignment_file = st.file_uploader(
+            "Assignment workbook",
+            type=["xlsx"],
+            key="assignment_workbook_uploader",
+        )
+        if uploaded_assignment_file is not None:
+            upload_signature = (
+                str(getattr(uploaded_assignment_file, "name", "")),
+                int(getattr(uploaded_assignment_file, "size", 0) or 0),
+            )
+            if upload_signature != st.session_state.get("assignment_upload_signature"):
+                try:
+                    st.session_state.assignment_workbook = read_assignment_workbook(uploaded_assignment_file)
+                    st.session_state.assignment_workbook_frames = read_workbook_frames(uploaded_assignment_file)
+                    st.session_state.assignment_upload_signature = upload_signature
+                    st.session_state.assignment_export_bytes = None
+                    st.success(
+                        f"Loaded {len(st.session_state.assignment_workbook_frames)} date sheet(s)."
+                    )
+                    st.rerun()
+                except Exception as exc:
+                    st.error(f"Assignment workbook could not be read: {exc}")
+
+        export_col, status_col = st.columns([1.2, 2.0], gap="small")
+        with export_col:
+            export_bytes = st.session_state.get("assignment_export_bytes")
+            download_timestamp = datetime.now(KST).strftime("%Y%m%d_%H%M%S")
+            st.download_button(
+                "Download Excel",
+                data=export_bytes or b"",
+                file_name=f"flight_assignments_{download_timestamp}.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                key="download_assignment_excel",
+                width="stretch",
+                disabled=not bool(export_bytes),
+            )
+        with status_col:
+            known_dates = sorted(st.session_state.get("assignment_workbook_frames", {}))
+            if known_dates:
+                st.caption("Saved sheets: " + ", ".join(known_dates))
 
 
 def _pick_service_day_time(record: dict, direction: str, time_basis: str) -> Optional[str]:
@@ -1565,7 +1916,7 @@ show_turnaround = st.sidebar.checkbox("Turn-around", key="show_turnaround")
 show_des_org = st.sidebar.checkbox("DES/ORG", key="show_des_org")
 show_reg = st.sidebar.checkbox("REG", key="show_reg")
 show_spot = st.sidebar.checkbox("SPOT", key="show_spot")
-show_team = st.sidebar.checkbox("MEMO", key="show_team")
+show_team = st.sidebar.checkbox("ASSIGN", key="show_team")
 
 st.sidebar.markdown("---")
 st.sidebar.header("Timeline Settings")
@@ -1833,7 +2184,29 @@ except ValueError as exc:
     st.warning(str(exc))
     st.stop()
 
-content_main, content_spacer = st.columns([7, 2])
+try:
+    # The Refresh button controls the Ubikais request.  The download button
+    # below always uses the data currently rendered on screen.
+    _prepare_assignment_export(
+        dep_records=summary["dep_records"],
+        arr_records=summary["arr_records"],
+        flight_date=base_date,
+    )
+except Exception as exc:
+    st.error(f"Assignment Excel preparation failed: {exc}")
+
+timeline_layout = st.container(key="timeline_layout")
+content_main, content_spacer = timeline_layout.columns([1240, 496], gap="small")
+
+with content_spacer:
+    _render_team_assignment_editor(
+        summary=summary,
+        base_date=base_date,
+        dep_df=dep_df,
+        arr_df=arr_df,
+        config=config,
+        fig=fig,
+    )
 
 with content_main:
     with st.container(key="main_panel"):
@@ -1867,126 +2240,6 @@ with content_main:
         mobile_action_container = st.container()
         service_day_end = base_date + timedelta(days=1) if int(service_start_hour) > 0 else base_date
         service_day_end_time = f"{int(service_start_hour):02d}:00" if int(service_start_hour) > 0 else "24:00"
-        with st.expander("Flight memo", expanded=False):
-            team_editor_rows = _build_team_assignment_editor_rows(
-                dep_records=summary["dep_records"],
-                arr_records=summary["arr_records"],
-                base_date=base_date,
-            )
-            if not team_editor_rows:
-                st.caption("No visible flights to assign.")
-            else:
-                editor_df = pd.DataFrame(team_editor_rows).set_index("FLT")
-                filter_col, editor_col = st.columns([1.1, 2.4], gap="small")
-
-                with filter_col:
-                    team_filter = st.text_input(
-                        "FLT filter",
-                        key="team_assignment_filter",
-                        placeholder="ex) ZE605",
-                    ).strip()
-
-                filtered_editor_df = editor_df
-                if team_filter:
-                    flt_mask = filtered_editor_df.index.astype(str).str.contains(team_filter, case=False, na=False)
-                    filtered_editor_df = filtered_editor_df[flt_mask].copy()
-
-                if filtered_editor_df.empty:
-                    with editor_col:
-                        st.caption("No flights match the current filter.")
-                    filtered_editor_df = None
-
-                visible_flights = list(filtered_editor_df.index) if filtered_editor_df is not None else []
-                editor_signature = (
-                    f"{len(visible_flights)}::"
-                    f"{visible_flights[0] if visible_flights else ''}::"
-                    f"{visible_flights[-1] if visible_flights else ''}"
-                )
-                team_editor_key = (
-                    f"team_assignment_editor::{base_date.isoformat()}::{editor_signature}"
-                )
-
-                if filtered_editor_df is not None:
-                    flt_to_team_keys = {
-                        str(flt): [str(key) for key in (team_keys or []) if str(key)]
-                        for flt, team_keys in filtered_editor_df["TEAM_KEYS"].items()
-                    }
-                    current_assignments = dict(st.session_state.get("team_assignments", {}))
-                    updated_assignments = dict(current_assignments)
-                    assignment_changed = False
-
-                    if len(filtered_editor_df) == 1:
-                        flight_code = str(filtered_editor_df.index[0]).strip()
-                        team_keys = flt_to_team_keys.get(flight_code, [])
-                        existing_values = {
-                            _normalize_team_text(current_assignments.get(team_key, ""))
-                            for team_key in team_keys
-                        }
-                        existing_values.discard("")
-                        current_team = next(iter(existing_values), "")
-                        single_team_key = f"single_team_input::{base_date.isoformat()}::{flight_code}"
-                        if single_team_key not in st.session_state:
-                            st.session_state[single_team_key] = current_team
-
-                        with editor_col:
-                            single_col1, single_col2 = st.columns([1.1, 1.6], gap="small")
-                            with single_col1:
-                                st.text_input("FLT", value=flight_code, disabled=True, key=f"{single_team_key}::flt")
-                            with single_col2:
-                                team_value = st.text_input("Memo", key=single_team_key)
-
-                        normalized_team = _normalize_team_text(team_value)
-                        if normalized_team != current_team:
-                            for team_key in team_keys:
-                                if normalized_team:
-                                    updated_assignments[str(team_key)] = normalized_team
-                                else:
-                                    updated_assignments.pop(str(team_key), None)
-                            assignment_changed = True
-                    else:
-                        editor_view_df = (
-                            filtered_editor_df.drop(columns=["TEAM_KEYS"])
-                            .reset_index()
-                            .rename(columns={"Team": "Memo"})
-                        )
-                        with editor_col:
-                            edited_team_df = st.data_editor(
-                                editor_view_df,
-                                hide_index=True,
-                                width="stretch",
-                                height=min(160, 52 + max(1, len(editor_view_df)) * 38),
-                                column_order=["FLT", "Memo"],
-                                disabled=["FLT"],
-                                key=team_editor_key,
-                            )
-
-                        for _, row in edited_team_df.iterrows():
-                            normalized_team = _normalize_team_text(row.get("Memo", ""))
-                            flight_code = str(row.get("FLT", "")).strip()
-                            team_keys = flt_to_team_keys.get(flight_code, [])
-                            existing_values = {
-                                _normalize_team_text(current_assignments.get(team_key, ""))
-                                for team_key in team_keys
-                            }
-                            existing_values.discard("")
-                            current_team = next(iter(existing_values), "")
-
-                            if normalized_team == current_team:
-                                continue
-
-                            for team_key in team_keys:
-                                if normalized_team:
-                                    updated_assignments[str(team_key)] = normalized_team
-                                else:
-                                    updated_assignments.pop(str(team_key), None)
-                            assignment_changed = True
-
-                    if assignment_changed:
-                        st.session_state.team_assignments = updated_assignments
-                        dep_df = _attach_team_assignments(dep_df, base_date, "dep")
-                        arr_df = _attach_team_assignments(arr_df, base_date, "arr")
-                        fig.clear()
-                        fig, summary = build_timeline_figure(dep_df, arr_df, config)
         airline_tag = selected_airlines[0] if len(selected_airlines) == 1 else f"{selected_airlines[0]}_plus{len(selected_airlines) - 1}"
         chart_stem = f"{base_date.strftime('%Y-%m-%d')}_{airline_tag}_D{summary['total_dep']}_A{summary['total_arr']}"
         png_name = f"{chart_stem}.png"
@@ -2037,6 +2290,7 @@ with content_main:
                             width="stretch",
                             key="download_pdf_desktop",
                         )
+        _render_assignment_workbook_ui(base_date=base_date)
         with mobile_action_container:
             with st.container(key="mobile_action_set"):
                 st.button("Next day", key="btn_next_day_mobile", on_click=_next_day, width="stretch")
