@@ -17,6 +17,16 @@ def _read_upload(data: bytes, direction: str):
 
 
 def render_excel_mode() -> None:
+    # These modes are mutually exclusive: reuse the UBIKAIS layout keys so the
+    # existing width caps, column proportions and mobile CSS apply identically.
+    layout = st.container(key="timeline_layout")
+    content_main, _ = layout.columns([1240, 496], gap="small")
+    with content_main:
+        with st.container(key="main_panel"):
+            _render_excel_content()
+
+
+def _render_excel_content() -> None:
     st.title("엑셀 항공편 스케줄")
     st.caption("한 기준 공항의 출발·도착 파일을 입력하세요. 한쪽 파일만 있어도 됩니다. UBIKAIS 조회 및 조 배정은 사용하지 않습니다.")
     st.caption("첫 번째 시트를 읽습니다. 날짜 / 항공편명 / STD(출발) 또는 STA(도착)는 필수이며 출발지·도착지는 선택입니다. 공항은 IATA 3자리, 시간은 해당 공항 현지시간으로 입력하세요.")
@@ -124,9 +134,9 @@ def render_excel_mode() -> None:
             fig.clear()
     st.caption(f"표시 범위: {start} 이상 ~ {end} 미만 · 업로드된 자료만 표시합니다. 인접 날짜 자료가 파일에 없으면 해당 구간의 항공편은 표시되지 않습니다.")
     stem = f"excel_{selected_date:%Y-%m-%d}_D{summary['total_dep']}_A{summary['total_arr']}"
-    png_col, pdf_col = st.columns(2)
-    png_col.download_button("PNG 다운로드", png.getvalue(), file_name=f"{stem}.png", mime="image/png", key="excel_download_png")
-    pdf_col.download_button("PDF 다운로드", pdf.getvalue(), file_name=f"{stem}.pdf", mime="application/pdf", key="excel_download_pdf")
+    png_col, pdf_col = st.columns(2, gap="small")
+    png_col.download_button("PNG 다운로드", png.getvalue(), file_name=f"{stem}.png", mime="image/png", key="excel_download_png", width="stretch")
+    pdf_col.download_button("PDF 다운로드", pdf.getvalue(), file_name=f"{stem}.pdf", mime="application/pdf", key="excel_download_pdf", width="stretch")
     with st.expander("표시 범위의 입력 자료"):
         for direction, label in (("dep", "출발"), ("arr", "도착")):
             frame = plot_frames[direction]
