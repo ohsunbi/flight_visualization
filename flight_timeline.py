@@ -62,6 +62,7 @@ class TimelineConfig:
     show_spot: bool = False
     show_team: bool = False
     show_turnaround: bool = False
+    use_actual_schedule_dates: bool = False
 
 
 def departures_from_ubikais(records: list[dict[str, Any]]) -> pd.DataFrame:
@@ -255,6 +256,16 @@ def _build_timeline_figure(
     return fig, summary
 
 
+def _empty_prepared_records(frame: pd.DataFrame) -> pd.DataFrame:
+    """Keep plot column types defined when a direction has no valid flights."""
+    for column in ("start", "end", "marker"):
+        frame[column] = pd.Series(index=frame.index, dtype="datetime64[ns]")
+    for column in ("type", "time_str", "Label"):
+        frame[column] = pd.Series(index=frame.index, dtype=str)
+    frame["is_F"] = pd.Series(index=frame.index, dtype=bool)
+    return frame
+
+
 def _prepare_departures(dep_df: pd.DataFrame, config: TimelineConfig) -> pd.DataFrame:
     dep_df = dep_df.copy()
     if "TEAM" not in dep_df.columns:
@@ -263,11 +274,16 @@ def _prepare_departures(dep_df: pd.DataFrame, config: TimelineConfig) -> pd.Data
     dep_df["TIME_RAW"] = dep_df.apply(lambda row: _pick_time_dep(row, config.time_basis), axis=1)
     dep_df = dep_df[pd.notna(dep_df["TIME_RAW"])].reset_index(drop=True)
 
-    dep_df["time_dt"] = dep_df["TIME_RAW"].apply(
-        lambda value: hhmm_to_datetime(config.base_date, value, config.service_start_hour)
-    )
+    if config.use_actual_schedule_dates:
+        dep_df["time_dt"] = pd.to_datetime(dep_df["SCHEDULED_AT"], errors="coerce")
+    else:
+        dep_df["time_dt"] = dep_df["TIME_RAW"].apply(
+            lambda value: hhmm_to_datetime(config.base_date, value, config.service_start_hour)
+        )
     dep_df["time_dt"] = pd.to_datetime(dep_df["time_dt"], errors="coerce")
     dep_df = dep_df.dropna(subset=["time_dt"]).reset_index(drop=True)
+    if dep_df.empty:
+        return _empty_prepared_records(dep_df)
 
     dep_df["is_F"] = dep_df["FLT"].astype(str).str.strip().str.upper().str.endswith("F")
     dep_df["start"] = dep_df.apply(
@@ -305,11 +321,16 @@ def _prepare_arrivals(arr_df: pd.DataFrame, config: TimelineConfig) -> pd.DataFr
     arr_df["TIME_RAW"] = arr_df.apply(lambda row: _pick_time_arr(row, config.time_basis), axis=1)
     arr_df = arr_df[pd.notna(arr_df["TIME_RAW"])].reset_index(drop=True)
 
-    arr_df["time_dt"] = arr_df["TIME_RAW"].apply(
-        lambda value: hhmm_to_datetime(config.base_date, value, config.service_start_hour)
-    )
+    if config.use_actual_schedule_dates:
+        arr_df["time_dt"] = pd.to_datetime(arr_df["SCHEDULED_AT"], errors="coerce")
+    else:
+        arr_df["time_dt"] = arr_df["TIME_RAW"].apply(
+            lambda value: hhmm_to_datetime(config.base_date, value, config.service_start_hour)
+        )
     arr_df["time_dt"] = pd.to_datetime(arr_df["time_dt"], errors="coerce")
     arr_df = arr_df.dropna(subset=["time_dt"]).reset_index(drop=True)
+    if arr_df.empty:
+        return _empty_prepared_records(arr_df)
 
     arr_df["is_F"] = arr_df["FLT"].astype(str).str.strip().str.upper().str.endswith("F")
     arr_df["start"] = arr_df.apply(

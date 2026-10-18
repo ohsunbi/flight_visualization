@@ -1828,6 +1828,24 @@ def _build_schedule_comparison(
     }
 
 
+input_mode = st.sidebar.radio("자료 입력 방식", ["UBIKAIS", "엑셀"], key="schedule_input_mode")
+if input_mode == "엑셀":
+    from flight_excel_ui import render_excel_mode
+
+    # Keep UBIKAIS widget values when Streamlit cleans up controls hidden in this
+    # mode. Assignment dictionaries and cached payloads already use durable keys.
+    preserved_keys = {
+        "base_date", "airport", "custom_airline_input", "flight_lookup_code",
+        "flight_lookup_start_date", "flight_lookup_end_date", "flight_lookup_direction",
+        "flight_lookup_time_basis", "flight_compare_base_date", "flight_compare_comparison_date",
+        *DEFAULT_LABEL_FLAGS, *DEFAULT_TIMELINE_VALUES,
+    }
+    for state_key in list(st.session_state):
+        if state_key in preserved_keys or state_key.startswith(("airline_enabled::", "aircraft_type_enabled::")):
+            st.session_state[state_key] = st.session_state[state_key]
+    render_excel_mode()
+    st.stop()
+
 current_url_params = st.query_params.to_dict()
 current_url_signature = _url_signature(current_url_params)
 if st.session_state["_applied_url_signature"] != current_url_signature:

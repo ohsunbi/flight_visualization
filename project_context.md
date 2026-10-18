@@ -1,7 +1,7 @@
 # Flight Visualization 프로젝트 컨텍스트
 
-최종 갱신: 2026-07-14  
-현재 기준 커밋: `15ab9e0` (`2026_07_13_changed18`)
+최종 갱신: 2026-10-18
+확인한 기준 커밋: `9f29254`. 아래 엑셀 스케줄 모드 변경은 이 커밋 이후 작업이며 아직 커밋하지 않았다.
 
 ## 문서 목적
 
@@ -61,6 +61,14 @@
   - `TimelineConfig` 정의
   - Matplotlib 타임라인 Figure 생성
   - 중첩 수치, 행 배치, turn-around 연결, Memo badge 처리
+- `flight_excel.py`
+  - 수동 스케줄 `.xlsx` 읽기·검증, 양식 생성, 서비스 날짜 분류와 차트 DataFrame 변환
+- `flight_excel_ui.py`
+  - UBIKAIS와 분리된 엑셀 입력 화면, 날짜별 차트 및 PNG/PDF 다운로드
+- `flight_assignments.py`
+  - 기존 UBIKAIS 운항편의 조 배정 엑셀 읽기·내보내기. 수동 스케줄 입력과 별개
+- `test_flight_excel.py`
+  - 수동 스케줄 검증·서비스 날짜 경계·차트 및 Streamlit 모드 분리 테스트
 - `ubikais_client.py`
   - UBIKAIS 출발·도착 JSON API 호출
   - pagination 처리
@@ -96,6 +104,7 @@ Pandas       2.3.3
 PyArrow      23.0.1
 NumPy        2.4.2
 Matplotlib   3.10.8
+openpyxl     3.1.5
 ```
 
 `pyproject.toml`의 Python 범위:
@@ -138,7 +147,7 @@ uv lock --upgrade-package pyarrow
 
 운영 브랜치에서 검증 없이 전체 패키지를 최신 버전으로 올리지 않는다.
 
-## 앱 데이터 흐름
+## 앱 데이터 흐름 (UBIKAIS 모드)
 
 1. 사용자가 날짜, 항공사, 공항과 필터를 선택한다.
 2. `before_app.py`가 `UbikaisQuery`를 구성한다.
@@ -148,6 +157,34 @@ uv lock --upgrade-package pyarrow
 6. 기종 필터와 Memo assignment를 적용한다.
 7. `build_timeline_figure()`가 Matplotlib Figure와 summary를 반환한다.
 8. Streamlit에서 차트를 표시하고 PNG/PDF 다운로드 데이터를 생성한다.
+
+## 엑셀 스케줄 모드 (2026-10-18)
+
+- `before_app.py`의 자료 입력 방식 기본값은 UBIKAIS다. 엑셀 선택 시 URL 적용·API 조회·기종 필터·조 배정 실행 전에 `render_excel_mode()`로 분기한다.
+- 출발·도착은 각각 별도 `.xlsx` 파일이며 한쪽만 입력해도 된다. 각 파일의 첫 번째 시트를 읽는다.
+- 출발 열: `날짜 / 항공편명 / STD / 출발지 / 도착지`.
+- 도착 열: `날짜 / 항공편명 / STA / 출발지 / 도착지`.
+- 앞의 세 열은 필수다. 출발지·도착지는 열 자체가 없거나 값이 비어 있어도 허용하며, 입력할 때는 IATA 영문 3자리 코드(예: ICN)를 사용한다. UBIKAIS의 ICAO 입력 계약은 그대로다.
+- 날짜는 실제 달력 날짜, 시간은 한 기준 공항의 현지시간이다. 별도 시차 변환은 하지 않는다. 날짜는 Excel 날짜 또는 YYYY-MM-DD, YYYY/MM/DD, YYYYMMDD를 지원한다. 시간은 Excel 시간, HH:MM, HHMM을 지원하며 분 단위로 검증한다.
+- 실제 날짜·시간을 `SCHEDULED_AT`으로 결합한다. `service_dates()`는 여기서 서비스 시작 시각을 빼 서비스 날짜를 구하며, `timeline_frame()`은 `[선택 날짜+시작 시각, 다음 날+시작 시각)`의 항공편만 차트로 전달한다.
+- 시작 시각 기본값은 0시이며, 2시로 설정하면 12월 3일 01:00 항공편은 12월 2일 서비스 차트에 포함된다. 실제 항공편 날짜는 변경하지 않는다.
+- 두 파일의 서비스 날짜 합집합을 선택 목록으로 제공하며 하루씩 표시한다. 다음 날짜 자료가 파일에 없으면 API로 보충하지 않는다. 작업 구간은 선택된 항공편의 전후 작업시간에 따라 서비스 범위를 넘어갈 수 있다.
+- `TimelineConfig.use_actual_schedule_dates=True`일 때만 차트가 `SCHEDULED_AT`을 그대로 사용한다. 기본값 False인 기존 UBIKAIS/CLI의 시간 fallback·새벽 이월 방식은 유지한다.
+- 엑셀 모드는 STD/STA 기준이며, 양방향 공항 정보는 미리보기에 보존한다. DES/ORG 라벨에는 출발편 도착지·도착편 출발지를 사용한다. 조 배정, 등록기호/SPOT, Turn-around, 기종 필터, API 비교·운항 조회는 제공하지 않는다.
+- `excel_` 접두사로 UI 상태를 분리한다. UBIKAIS 날짜·설정 위젯은 숨겨져도 값이 정리되지 않도록 보존하며, 기존 조 배정 딕셔너리와 API payload에는 엑셀 데이터를 넣지 않는다.
+- 파일은 디스크에 저장하지 않는다. 내용과 방향 기준의 읽기 결과만 `st.cache_data(max_entries=32)`로 메모리에 캐시한다. 파일 교체·제거 시 현재 업로더 내용으로 다시 판단한다. 다른 모드로 이동하면 업로더가 정리될 수 있어 재업로드가 필요하다. 영구 저장 기능은 없다.
+- 오류는 파일·시트·행 번호로 안내하고 해당 업로드의 오류가 해결될 때까지 전체 차트 생성을 중단한다. 빈 행은 무시하며 완전 중복은 경고하고 그대로 유지한다. IATA 코드는 3자리 형식만 검증하며 실제 공항 존재 여부를 외부 조회하지 않는다.
+- PNG/PDF는 기존 Figure 생성기와 렌더링 잠금을 재사용한다. 빈 방향에서도 차트 준비 열을 생성하도록 보완했다.
+- 추가 패키지·lock 변경 없이 기존 openpyxl 3.1.5를 사용한다.
+
+검증 명령:
+
+```powershell
+.venv\Scripts\python.exe -m unittest test_flight_excel -v
+.venv\Scripts\python.exe -m py_compile before_app.py flight_timeline.py flight_excel.py flight_excel_ui.py test_flight_excel.py
+```
+
+테스트는 UBIKAIS 응답과 파일 업로더를 대체해 실행한다. 실제 API 통신, 브라우저 파일 선택 및 Cloud 배포는 별도 확인이 필요하다.
 
 ## 핵심 기능
 
@@ -305,6 +342,18 @@ Segmentation fault 조사 시 필요한 로그:
 8. 최종 응답에서 변경 파일, 영향, 테스트 결과와 배포 필요 여부를 설명한다.
 
 ## 최근 중요 변경 요약
+
+### 2026-10-18
+
+- 수동 엑셀 스케줄 모드, 날짜별 차트와 PNG/PDF 다운로드 추가.
+- 실제 날짜를 보존하면서 서비스 데이 범위로 분류하는 데이터 경로 추가.
+- 기본 차트의 빈 출발/도착 방향 처리 보완 및 회귀 테스트 추가.
+
+### 2026-09-06 (현재 코드 확인으로 보충)
+
+- `f99c3bc`에서 조 배정 UI와 `flight_assignments.py` 추가.
+- 조 배정 엑셀 가져오기·내보내기를 위해 openpyxl 3.1.5를 직접 의존성과 lock에 추가.
+- `.python-version`은 8월 변경으로 현재 `3.12`이며 패치 버전을 고정하지 않는다. Dev Container는 Python 3.11 이미지여서 pyproject의 3.12 요구와 불일치한다. 이번 엑셀 기능에서 환경 파일은 변경하지 않았다.
 
 ### 2026-07-14
 
