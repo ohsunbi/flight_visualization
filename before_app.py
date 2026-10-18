@@ -33,6 +33,7 @@ from flight_assignments import (
     workbook_bytes,
 )
 from ubikais_client import UbikaisQuery, fetch_records
+from flight_workload_ui import render_workload_panel
 
 try:
     from ubikais_client import fetch_records_for_airlines
@@ -1828,7 +1829,12 @@ def _build_schedule_comparison(
     }
 
 
-input_mode = st.sidebar.radio("자료 입력 방식", ["UBIKAIS", "엑셀"], key="schedule_input_mode")
+st.sidebar.subheader("Data source")
+input_mode = st.sidebar.radio(
+    "Data source", ["UBIKAIS", "엑셀"],
+    format_func=lambda value: "Excel" if value == "엑셀" else value,
+    horizontal=True, label_visibility="collapsed", key="schedule_input_mode",
+)
 if input_mode == "엑셀":
     from flight_excel_ui import render_excel_mode
 
@@ -2331,6 +2337,11 @@ with content_main:
                         key="download_pdf_mobile",
                         width="stretch",
                     )
+        render_workload_panel(
+            summary=summary, display_date=base_date, day_start_hour=int(service_start_hour),
+            key_prefix="ubikais", language="en",
+            chart_context=repr((config, selected_airlines, departure_airport, selected_types)),
+        )
         with st.expander("Flight schedule comparison"):
             with st.form("flight_compare_form", border=False, enter_to_submit=False):
                 compare_date_col1, compare_date_col2 = st.columns(2, gap="small")

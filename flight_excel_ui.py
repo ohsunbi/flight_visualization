@@ -9,6 +9,7 @@ import pandas as pd
 
 from flight_excel import read_schedule, schedule_columns, service_dates, template_bytes, timeline_frame
 from flight_timeline import MATPLOTLIB_RENDER_LOCK, TimelineConfig, build_timeline_figure
+from flight_workload_ui import render_workload_panel
 
 
 @st.cache_data(show_spinner=False, max_entries=32)
@@ -137,6 +138,10 @@ def _render_excel_content() -> None:
     png_col, pdf_col = st.columns(2, gap="small")
     png_col.download_button("PNG 다운로드", png.getvalue(), file_name=f"{stem}.png", mime="image/png", key="excel_download_png", width="stretch")
     pdf_col.download_button("PDF 다운로드", pdf.getvalue(), file_name=f"{stem}.pdf", mime="application/pdf", key="excel_download_pdf", width="stretch")
+    render_workload_panel(
+        summary=summary, display_date=selected_date, day_start_hour=int(start_hour),
+        key_prefix="excel", chart_context=repr(config),
+    )
     with st.expander("표시 범위의 입력 자료"):
         for direction, label in (("dep", "출발"), ("arr", "도착")):
             frame = plot_frames[direction]

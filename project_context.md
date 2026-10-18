@@ -1,7 +1,7 @@
 # Flight Visualization 프로젝트 컨텍스트
 
 최종 갱신: 2026-10-18
-확인한 기준 커밋: `9f29254`. 아래 엑셀 스케줄 모드 변경은 이 커밋 이후 작업이며 아직 커밋하지 않았다.
+확인한 기준 커밋: `b5a509a`. 아래 시간대별 조업 편수 기능은 이 커밋 이후 작업이며 아직 커밋하지 않았다.
 
 ## 문서 목적
 
@@ -69,6 +69,10 @@
   - 기존 UBIKAIS 운항편의 조 배정 엑셀 읽기·내보내기. 수동 스케줄 입력과 별개
 - `test_flight_excel.py`
   - 수동 스케줄 검증·서비스 날짜 경계·차트 및 Streamlit 모드 분리 테스트
+- `flight_workload.py` / `flight_workload_ui.py`
+  - 현재 차트의 조업 구간에 대한 시간 범위 집계 및 두 모드 공통 UI
+- `test_flight_workload.py`
+  - 경계·자정·설정 변경 초기화·모드 연결과 집계 UI 위치 테스트
 - `ubikais_client.py`
   - UBIKAIS 출발·도착 JSON API 호출
   - pagination 처리
@@ -185,6 +189,27 @@ uv lock --upgrade-package pyarrow
 ```
 
 테스트는 UBIKAIS 응답과 파일 업로더를 대체해 실행한다. 실제 API 통신, 브라우저 파일 선택 및 Cloud 배포는 별도 확인이 필요하다.
+
+## 시간대별 조업 편수
+
+- UBIKAIS에서는 `Flight schedule comparison` 바로 위, 엑셀에서는 PNG/PDF 다운로드 버튼 바로 아래에 공통 집계 UI를 표시한다.
+- 집계 기능은 기본적으로 접힌 펼침 영역에 둔다. 시작·종료 각각 시(00~23)와 분(00/10/20/30/40/50)을 따로 선택하며 기본값은 07:00~09:00이다. 선택 위젯과 계산 버튼을 `st.form`으로 묶어 선택 중에는 서버 재실행을 일으키지 않고, 계산 버튼으로 한 번에 적용한다. 제출 전에는 이전 결과와 실제 집계 범위를 유지한다. 시작·종료가 같으면 오류를 안내하고, 계산 결과는 기존 HTML 카드 스타일로 크게 표시한다.
+- UBIKAIS 집계 UI는 `Handling count by time range`이며 입력·버튼·안내·오류·결과·상세 표 모두 영어다. 엑셀의 집계 UI는 한국어를 유지한다. 사이드바 입력 방식은 `Airlines`와 같은 subheader 크기의 `Data source` 제목과 가로 라디오(`UBIKAIS` / `Excel`)를 사용한다. 모드의 내부 값과 key는 기존 세션 호환성을 위해 유지한다.
+- 대상은 현재 차트 생성 결과의 `summary["dep_records"]` / `summary["arr_records"]`다. 다른 날짜나 필터로 제외된 항공편을 추가 조회하지 않는다. 등록기호 기준 항공기 대수가 아니라 출발·도착 조업 건수를 센다.
+- 집계 조건은 `조업 시작 < 조회 종료` AND `조업 종료 > 조회 시작`이며, 양의 조업 길이가 있어야 한다. 경계에 닿기만 하는 조업과 길이 0인 막대는 제외한다. 기존 중첩 숫자(최대 동시 조업 수)를 합산하는 방식이 아니다.
+- 한 차트 행은 한 조업으로 한 번 센다. 같은 편명의 별도 행은 합치지 않는다. Turn-around로 연결되어도 출발·도착은 각각 센다. 차트의 handling 설정 및 F편 특수 작업시간을 그대로 따른다.
+- 시각은 현재 표시 날짜를 기준으로 해석한다. 시작 시각이 하루 시작 시각보다 이르면 다음 달력 날짜에 대응한다. 종료 시각이 시작 시각보다 이르면 시작 날짜의 다음 날로 계산하며, 같으면 오류를 안내한다. 예: 하루 시작 02:00인 12월 2일 차트에서 00:00~01:00은 12월 3일 새벽이고, 23:00~01:00은 12월 2일 밤~12월 3일 새벽이다.
+- 실제 집계 시작·종료 날짜·시간을 결과 위에 명시한다. 조회 구간이 차트 날짜 범위를 넘어도 현재 차트의 조업만 대상으로 하며, 인접 날짜 항공편을 자동 보충하지 않는다.
+- 상세 펼침에는 방향·편명·출도착지·실제 조업 시작/종료 날짜·시간을 표시한다. 출도착지는 기존 공항 코드 변환기로 IATA 표시하며, 출발은 목적지, 도착은 출발지를 뜻한다. 빈 결과도 0편으로 표시한다.
+- `excel_workload_*` / `ubikais_workload_*` 세션 key로 모드 상태를 분리한다. 시·분 선택은 `_workload_start_hour` / `_workload_start_minute` / `_workload_end_hour` / `_workload_end_minute` key를 사용해 과거 time_input·텍스트 입력 상태와 충돌하지 않는다. 날짜·하루 시작 시각·필터·chart config·대상 레코드·제출된 조회 시각·언어의 signature가 달라지면 결과를 초기화하며 재계산이 필요하다. 추가 API 호출이나 파일 저장은 없다.
+- 차트와 PNG/PDF 이미지 자체에는 집계 결과를 삽입하지 않는다. 의존성 및 lock 파일 변경은 없다.
+
+검증 명령:
+
+```powershell
+.venv\Scripts\python.exe -m unittest test_flight_workload test_flight_excel -v
+.venv\Scripts\python.exe -m py_compile before_app.py flight_excel_ui.py flight_workload.py flight_workload_ui.py test_flight_workload.py
+```
 
 ## 핵심 기능
 
