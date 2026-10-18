@@ -118,7 +118,12 @@ class ScreenTests(unittest.TestCase):
         with patch("streamlit.file_uploader", side_effect=lambda label, **kwargs: upload if kwargs["key"] == "excel_upload_dep" else None):
             app.run()
         self.assertFalse(app.exception)
-        self.assertEqual([item.value for item in app.metric], ["1", "0"])
+        self.assertFalse(app.metric)
+        cards = [item.value for item in app.markdown if 'class="summary-cards"' in item.value]
+        self.assertEqual(len(cards), 1)
+        self.assertIn('class="summary-card-value">1</div>', cards[0])
+        self.assertIn('class="summary-card-value">0</div>', cards[0])
+        self.assertEqual(app.date_input(key="excel_display_date").label, "표시 날짜")
         self.assertEqual(len(app.get("download_button")), 4)
         replacement = io.BytesIO(workbook([[date(2027, 3, 5), "ZE900", "01:00", "", ""]]))
         replacement.name = "replacement.xlsx"
@@ -126,7 +131,7 @@ class ScreenTests(unittest.TestCase):
         with patch("streamlit.file_uploader", side_effect=lambda label, **kwargs: replacement if kwargs["key"] == "excel_upload_dep" else None):
             app.run()
         self.assertFalse(app.exception)
-        self.assertEqual(app.selectbox(key="excel_display_date").value, date(2027, 3, 4))
+        self.assertEqual(app.date_input(key="excel_display_date").value, date(2027, 3, 4))
         invalid = io.BytesIO(workbook([[DAY, "ZE900", "25:00", "", ""]]))
         invalid.name = "invalid.xlsx"
         with patch("streamlit.file_uploader", return_value=invalid):
@@ -137,7 +142,34 @@ class ScreenTests(unittest.TestCase):
         with patch("streamlit.file_uploader", return_value=None):
             app.run()
         self.assertFalse(app.exception)
-        self.assertFalse(app.metric)
+        self.assertFalse(app.date_input)
+        self.assertEqual(len(app.get("download_button")), 2)
+
+    def test_calendar_gap_and_start_hour_change(self):
+        upload = io.BytesIO(workbook([
+            [DAY, "ZE101", "01:00", "ICN", "NRT"],
+            [date(2026, 12, 4), "ZE102", "01:00", "ICN", "NRT"],
+        ]))
+        upload.name = "calendar.xlsx"
+        app = AppTest.from_string("from flight_excel_ui import render_excel_mode\nrender_excel_mode()", default_timeout=60)
+        with patch("streamlit.file_uploader", side_effect=lambda label, **kwargs: upload if kwargs["key"] == "excel_upload_dep" else None):
+            app.run()
+            self.assertFalse(app.exception)
+            calendar = app.date_input(key="excel_display_date")
+            self.assertEqual(calendar.min, DAY)
+            self.assertEqual(calendar.max, date(2026, 12, 4))
+            calendar.set_value(date(2026, 12, 3)).run()
+            self.assertFalse(app.exception)
+            self.assertEqual(app.date_input(key="excel_display_date").value, date(2026, 12, 3))
+            self.assertTrue(any("항공편이 없습니다" in item.value for item in app.info))
+            self.assertEqual(len(app.get("download_button")), 2)  # templates only
+            app.date_input(key="excel_display_date").set_value(date(2026, 12, 4)).run()
+            self.assertFalse(app.exception)
+            self.assertEqual(len(app.get("download_button")), 4)
+            app.number_input(key="excel_service_start_hour").set_value(2).run()
+            self.assertFalse(app.exception)
+            self.assertEqual(app.date_input(key="excel_display_date").value, date(2026, 12, 1))
+            self.assertTrue(any("표시 범위: 2026-12-01 02:00" in item.value for item in app.caption))
 
     def test_mode_switch_preserves_ubikais_state_and_makes_no_excel_api_calls(self):
         def payload(direction, query, airlines, **kwargs):

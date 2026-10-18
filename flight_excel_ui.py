@@ -23,11 +23,11 @@ def render_excel_mode() -> None:
     st.caption("날짜: Excel 날짜 또는 YYYY-MM-DD · 시간: Excel 시간, HH:MM 또는 HHMM. 양식의 예시 행은 실제 자료로 교체해 주세요.")
 
     st.sidebar.header("엑셀 차트 설정")
-    start_hour = st.sidebar.number_input("서비스 데이 시작 시각", 0, 23, value=0, step=1, key="excel_service_start_hour")
+    start_hour = st.sidebar.number_input("하루 시작 시각", 0, 23, value=0, step=1, key="excel_service_start_hour")
     interval = st.sidebar.selectbox("중첩 계산 간격(분)", [10, 20, 30], index=2, key="excel_interval")
     show_flt = st.sidebar.checkbox("FLT", value=True, key="excel_show_flt")
     show_route = st.sidebar.checkbox("DES/ORG", value=False, key="excel_show_route")
-    st.sidebar.caption("출발은 STD, 도착은 STA를 사용합니다. 날짜는 실제 운항 날짜로 유지하며 서비스 데이 범위로 묶습니다.")
+    st.sidebar.caption("출발은 STD, 도착은 STA를 사용합니다. 예: 하루 시작 시각이 2시면 선택한 날 02:00부터 다음 날 02:00 직전까지 표시합니다. 실제 운항 날짜는 변경하지 않습니다.")
     st.sidebar.subheader("작업시간(분)")
     dep_before = st.sidebar.number_input("출발 STD 이전", 0, 240, value=50, step=5, key="excel_dep_before")
     dep_after = st.sidebar.number_input("출발 STD 이후", 0, 240, value=10, step=5, key="excel_dep_after")
@@ -63,13 +63,23 @@ def render_excel_mode() -> None:
     if not dates:
         st.info("유효한 항공편이 있는 엑셀 파일을 업로드해 주세요.")
         return
-    # Widget options change when files/start hour change. Never retain an invalid day.
-    if st.session_state.get("excel_display_date") not in dates:
+    # File/start-hour changes may move the calendar bounds. Keep any day inside
+    # them, including gaps, so an empty date can be selected without jumping away.
+    current_date = st.session_state.get("excel_display_date")
+    if current_date is None or not dates[0] <= current_date <= dates[-1]:
         st.session_state["excel_display_date"] = dates[0]
-    selected_date = st.selectbox("표시할 서비스 날짜", dates, format_func=lambda day: day.isoformat(), key="excel_display_date")
+    selected_date = st.date_input(
+        "표시 날짜", min_value=dates[0], max_value=dates[-1],
+        format="YYYY-MM-DD", key="excel_display_date",
+    )
+    if selected_date is None:
+        st.info("표시할 날짜를 선택해 주세요.")
+        return
     start = f"{selected_date:%Y-%m-%d} {start_hour:02d}:00"
     end = f"{selected_date + timedelta(days=1):%Y-%m-%d} {start_hour:02d}:00"
-    st.caption(f"서비스 데이: {start} 이상 ~ {end} 미만 · 업로드된 자료만 표시합니다. 인접 날짜 자료가 파일에 없으면 해당 구간의 항공편은 표시되지 않습니다.")
+    if selected_date not in dates:
+        st.info("선택한 날짜의 표시 범위에 항공편이 없습니다.")
+        return
 
     plot_frames = {}
     for direction in ("dep", "arr"):
@@ -88,9 +98,22 @@ def render_excel_mode() -> None:
     except ValueError as exc:
         st.warning(f"차트를 생성할 수 없습니다: {exc}")
         return
-    first, second = st.columns(2)
-    first.metric("Departure", summary["total_dep"])
-    second.metric("Arrival", summary["total_arr"])
+    # Reuse the UBIKAIS main screen's HTML classes and app-level CSS.
+    st.markdown(
+        f"""
+        <div class="summary-cards">
+            <div class="summary-card">
+                <div class="summary-card-label">Departure</div>
+                <div class="summary-card-value">{summary["total_dep"]}</div>
+            </div>
+            <div class="summary-card">
+                <div class="summary-card-label">Arrival</div>
+                <div class="summary-card-value">{summary["total_arr"]}</div>
+            </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
     with MATPLOTLIB_RENDER_LOCK:
         try:
             png, pdf = io.BytesIO(), io.BytesIO()
@@ -99,11 +122,12 @@ def render_excel_mode() -> None:
             st.pyplot(fig, width="content")
         finally:
             fig.clear()
+    st.caption(f"표시 범위: {start} 이상 ~ {end} 미만 · 업로드된 자료만 표시합니다. 인접 날짜 자료가 파일에 없으면 해당 구간의 항공편은 표시되지 않습니다.")
     stem = f"excel_{selected_date:%Y-%m-%d}_D{summary['total_dep']}_A{summary['total_arr']}"
     png_col, pdf_col = st.columns(2)
     png_col.download_button("PNG 다운로드", png.getvalue(), file_name=f"{stem}.png", mime="image/png", key="excel_download_png")
     pdf_col.download_button("PDF 다운로드", pdf.getvalue(), file_name=f"{stem}.pdf", mime="application/pdf", key="excel_download_pdf")
-    with st.expander("선택한 서비스 데이 입력 자료"):
+    with st.expander("표시 범위의 입력 자료"):
         for direction, label in (("dep", "출발"), ("arr", "도착")):
             frame = plot_frames[direction]
             st.subheader(label)
