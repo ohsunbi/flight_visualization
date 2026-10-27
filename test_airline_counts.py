@@ -38,8 +38,27 @@ class AirlineCountTests(unittest.TestCase):
         for variant in ("desktop", "mobile"):
             for code, count in counts.items():
                 widget = app.checkbox(key=f"airline_enabled::{variant}::{code}")
-                self.assertTrue(widget.label.endswith(f" ({count})"), widget.label)
-            self.assertNotIn("(", app.checkbox(key=f"airline_enabled::{variant}::PTA").label)
+                self.assertEqual(widget.label, f"{code} ({count})")
+            self.assertFalse(any(widget.key == f"airline_enabled::{variant}::PTA" for widget in app.checkbox))
+
+    def test_esr_only_default_and_custom_add(self):
+        app = AppTest.from_file("before_app.py", default_timeout=90)
+        app.session_state["base_date"] = DAY
+        with patch("ubikais_client.fetch_records_for_airlines", side_effect=payload):
+            app.run()
+            self.assertFalse(app.exception)
+            for variant in ("desktop", "mobile"):
+                widgets = [widget for widget in app.checkbox if str(widget.key).startswith(f"airline_enabled::{variant}::")]
+                self.assertEqual([widget.key for widget in widgets], [f"airline_enabled::{variant}::ESR"])
+                self.assertTrue(widgets[0].value)
+                self.assertEqual(widgets[0].label, "ESR (4)")
+            for _ in range(2):
+                app.text_input(key="custom_airline_input").set_value("twb")
+                app.button(key="FormSubmitter:airline_add_form-Add").click().run()
+                self.assertFalse(app.exception)
+            self.assertEqual(app.session_state["custom_airline_codes"], ["TWB"])
+            app.button(key="airline_apply_desktop").click().run()
+            self.check_counts(app, {"ESR": 4, "TWB": 2})
 
     def test_counts_filters_and_apply(self):
         app = self.app()

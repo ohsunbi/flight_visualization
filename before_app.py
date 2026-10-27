@@ -120,23 +120,11 @@ LABEL_QUERY_KEYS = (
     ("turn", "show_turnaround"),
 )
 AIRLINE_OPTIONS = [
-    ("ESR", "이스타항공"),
-    ("TWB", "트리니티항공"),
-    ("APJ", "피치항공"),
-    ("PTA", "파라타항공"),
-    ("MMA", "미얀마국제항공"),
-    ("KZR", "에어아스타나"),
-    ("CRK", "홍콩항공"),
+    ("ESR", ""),
 ]
 AIRLINE_LABELS = {code: f"{code} {name}" for code, name in AIRLINE_OPTIONS}
 AIRLINE_SHORT_LABELS = {
-    "ESR": "ESR 이스타",
-    "TWB": "TWB 티웨이",
-    "APJ": "APJ 피치",
-    "PTA": "PTA 파라타",
-    "MMA": "MMA 미얀마",
-    "KZR": "KZR 아스타나",
-    "CRK": "CRK 홍콩",
+    "ESR": "ESR",
 }
 DEFAULT_AIRLINE_CODES = [code for code, _ in AIRLINE_OPTIONS]
 AIRPORT_OPTIONS = [
