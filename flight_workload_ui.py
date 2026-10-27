@@ -65,8 +65,8 @@ def _render_workload_contents(
             f"Start times before the service-day cutoff ({day_start_hour:02d}:00) refer to the next calendar day.",
         ))
     st.caption(text(
-        "시·분을 선택한 뒤 계산 버튼을 눌러 적용하세요. 분은 10분 단위로 선택합니다.",
-        "Select hours and minutes, then click Calculate to apply. Minutes are in 10-minute steps.",
+        "시·분을 선택한 뒤 계산 버튼을 눌러 적용하세요. 분은 5분 단위로 선택합니다.",
+        "Select hours and minutes, then click Calculate to apply. Minutes are in 5-minute steps.",
     ))
     # Form controls are sent together on submission, avoiding chart reruns while
     # the user adjusts the four selections. Keep the previous counted range visible.
@@ -77,7 +77,7 @@ def _render_workload_contents(
             format_func=lambda value: f"{value:02d}", key=f"{key_prefix}_workload_start_hour",
         )
         start_minute = start_minute_col.selectbox(
-            text("시작 분", "Start minute"), range(0, 60, 10),
+            text("시작 분", "Start minute"), range(0, 60, 5),
             format_func=lambda value: f"{value:02d}", key=f"{key_prefix}_workload_start_minute",
         )
         end_hour = end_hour_col.selectbox(
@@ -85,7 +85,7 @@ def _render_workload_contents(
             format_func=lambda value: f"{value:02d}", key=f"{key_prefix}_workload_end_hour",
         )
         end_minute = end_minute_col.selectbox(
-            text("종료 분", "End minute"), range(0, 60, 10),
+            text("종료 분", "End minute"), range(0, 60, 5),
             format_func=lambda value: f"{value:02d}", key=f"{key_prefix}_workload_end_minute",
         )
         submitted = st.form_submit_button(text("조업 편수 계산", "Calculate"), key=f"{key_prefix}_workload_calculate", width="stretch")

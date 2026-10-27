@@ -163,6 +163,30 @@ DEFAULT_AIRPORT_CODE = "RKSI"
 st.markdown(
     """
     <style>
+    div.st-key-sidebar_source,
+    div.st-key-sidebar_airport,
+    div.st-key-sidebar_date {
+        gap: 0.375rem;
+        padding-bottom: 0.75rem;
+        border-bottom: 1px solid rgba(128, 128, 128, 0.25);
+    }
+    .st-key-sidebar_source [data-testid="stHeading"] [data-testid="stMarkdownContainer"],
+    .st-key-sidebar_airport [data-testid="stHeading"] [data-testid="stMarkdownContainer"],
+    .st-key-sidebar_date [data-testid="stHeading"] [data-testid="stMarkdownContainer"] {
+        margin-bottom: 0;
+    }
+    .st-key-sidebar_source h3,
+    .st-key-sidebar_airport h3,
+    .st-key-sidebar_date h3 {
+        padding-top: 0.25rem;
+        padding-bottom: 0.125rem;
+        margin: 0;
+    }
+    div[data-testid="stSidebar"] .st-key-sidebar_date_nav button {
+        font-size: 1.15rem;
+        line-height: 1;
+        font-weight: 600;
+    }
     div.st-key-custom_airline_input {
         margin-bottom: -0.35rem;
     }
@@ -730,12 +754,15 @@ def _render_airline_filter_form(
     *,
     variant: str,
     short_labels: bool,
+    airline_counts: Optional[dict[str, int]] = None,
 ) -> None:
     with st.form(f"airline_filter_form_{variant}", border=False, enter_to_submit=False):
         st.caption("Click Apply to apply changes.")
 
         for airline_code, airline_name in airline_options:
             label = _airline_checkbox_label(airline_code, airline_name, short=short_labels)
+            if airline_counts is not None and airline_code in airline_counts:
+                label = f"{label} ({airline_counts[airline_code]})"
             st.checkbox(label, key=_airline_widget_key(airline_code, variant))
 
         airline_action_col1, airline_action_col2 = st.columns(2, gap="small")
@@ -764,6 +791,19 @@ def _render_airline_filter_form(
             type="primary",
             width="stretch",
         )
+
+
+def _render_airline_filters(slot, airline_options, airline_codes, airline_counts=None) -> None:
+    with slot.container():
+        for variant in ("desktop", "mobile"):
+            with st.container(key=f"airline_filter_{variant}"):
+                _render_airline_filter_form(
+                    airline_options,
+                    airline_codes,
+                    variant=variant,
+                    short_labels=variant == "mobile",
+                    airline_counts=airline_counts,
+                )
 
 
 def _aircraft_type_widget_key(aircraft_type: str) -> str:
@@ -1046,8 +1086,8 @@ def _render_team_assignment_editor(
     config: TimelineConfig,
     fig,
 ) -> None:
-    """Render the legacy quick team editor below the chart action row."""
-    with st.expander("Team assignment (quick edit)", expanded=True, width="stretch"):
+    """Render the team editor below the flight schedule lookup."""
+    with st.expander("Team assignment", expanded=False, width="stretch"):
         team_editor_rows = _build_team_assignment_editor_rows(
             dep_records=summary["dep_records"],
             arr_records=summary["arr_records"],
@@ -1829,12 +1869,13 @@ def _build_schedule_comparison(
     }
 
 
-st.sidebar.subheader("Data source")
-input_mode = st.sidebar.radio(
-    "Data source", ["UBIKAIS", "엑셀"],
-    format_func=lambda value: "Excel" if value == "엑셀" else value,
-    horizontal=True, label_visibility="collapsed", key="schedule_input_mode",
-)
+with st.sidebar.container(key="sidebar_source"):
+    st.subheader("Data source")
+    input_mode = st.radio(
+        "Data source", ["UBIKAIS", "엑셀"],
+        format_func=lambda value: "Excel" if value == "엑셀" else value,
+        horizontal=True, label_visibility="collapsed", key="schedule_input_mode",
+    )
 if input_mode == "엑셀":
     from flight_excel_ui import render_excel_mode
 
@@ -1861,27 +1902,26 @@ if st.session_state["_applied_url_signature"] != current_url_signature:
 if "flight_lookup_time_basis" not in st.session_state or st.session_state.flight_lookup_time_basis not in {"ground", "flight"}:
     st.session_state.flight_lookup_time_basis = st.session_state.time_basis
 
-st.sidebar.date_input("Date", key="base_date", label_visibility="collapsed")
-st.sidebar.markdown(
-    """
-    <style>
-    div[data-testid="stSidebar"] .st-key-sidebar_date_nav button {
-        font-size: 1.15rem;
-        line-height: 1;
-        font-weight: 600;
-    }
-    </style>
-    """,
-    unsafe_allow_html=True,
-)
-with st.sidebar.container(key="sidebar_date_nav"):
-    date_nav_col1, date_nav_col2, date_nav_col3 = st.columns(3, gap="small")
-    with date_nav_col1:
-        st.button("◀", key="btn_prev_day", on_click=_prev_day, width="stretch")
-    with date_nav_col2:
-        st.button("◉", key="btn_today_kst", on_click=_today_kst, width="stretch")
-    with date_nav_col3:
-        st.button("▶", key="btn_next_day", on_click=_next_day, width="stretch")
+with st.sidebar.container(key="sidebar_airport"):
+    st.subheader("Airport")
+    airport = st.selectbox(
+        "Airport",
+        options=[code for code, _ in AIRPORT_OPTIONS],
+        format_func=lambda code: AIRPORT_LABELS.get(code, code),
+        key="airport", label_visibility="collapsed",
+    )
+
+with st.sidebar.container(key="sidebar_date"):
+    st.subheader("Date")
+    st.date_input("Date", key="base_date", label_visibility="collapsed")
+    with st.container(key="sidebar_date_nav"):
+        date_nav_col1, date_nav_col2, date_nav_col3 = st.columns(3, gap="small")
+        with date_nav_col1:
+            st.button("◀", key="btn_prev_day", on_click=_prev_day, width="stretch")
+        with date_nav_col2:
+            st.button("◉", key="btn_today_kst", on_click=_today_kst, width="stretch")
+        with date_nav_col3:
+            st.button("▶", key="btn_next_day", on_click=_next_day, width="stretch")
 
 base_date = st.session_state.base_date
 if isinstance(base_date, datetime):
@@ -1911,21 +1951,7 @@ with st.sidebar.expander("Filter airlines", expanded=False):
         with add_airline_col2:
             st.form_submit_button("Add", on_click=_add_custom_airline, width="stretch")
 
-    with st.container(key="airline_filter_desktop"):
-        _render_airline_filter_form(
-            airline_options,
-            airline_codes,
-            variant="desktop",
-            short_labels=False,
-        )
-
-    with st.container(key="airline_filter_mobile"):
-        _render_airline_filter_form(
-            airline_options,
-            airline_codes,
-            variant="mobile",
-            short_labels=True,
-        )
+    airline_filter_slot = st.empty()
 
 st.sidebar.markdown(
     f"Selected: <span style='color:#ff6b5a; font-weight:600;'>{_airline_summary(selected_airlines)}</span>",
@@ -1975,19 +2001,13 @@ turnaround_limit_min = st.sidebar.number_input(
 )
 st.sidebar.caption("Maximum allowed time for a Turn-around connection from Arrival to the next Departure.")
 
-st.sidebar.markdown("---")
-airport = st.sidebar.selectbox(
-    "Airport",
-    options=[code for code, _ in AIRPORT_OPTIONS],
-    format_func=lambda code: AIRPORT_LABELS.get(code, code),
-    key="airport",
-)
 departure_airport = str(airport).strip().upper() or DEFAULT_AIRPORT_CODE
 arrival_airport = departure_airport
 
 st.title(f"Flight Schedule ({base_date.strftime('%Y-%m-%d')})")
 
 if not selected_airlines:
+    _render_airline_filters(airline_filter_slot, airline_options, airline_codes)
     st.warning("Choose at least one airline code.")
     st.stop()
 
@@ -2049,8 +2069,16 @@ try:
         service_start_hour=int(service_start_hour),
     )
 except Exception as exc:
+    _render_airline_filters(airline_filter_slot, airline_options, airline_codes)
     st.error(f"Ubikais data load failed: {exc}")
     st.stop()
+
+airline_counts = dict.fromkeys(selected_airlines, 0)
+for record in [*dep_payload["records"], *arr_payload["records"]]:
+    airline_code = str(record.get("airlineCode", "")).strip().upper()
+    if airline_code in airline_counts:
+        airline_counts[airline_code] += 1
+_render_airline_filters(airline_filter_slot, airline_options, airline_codes, airline_counts)
 
 dep_df = departures_from_ubikais(dep_payload["records"])
 arr_df = arrivals_from_ubikais(arr_payload["records"])
@@ -2186,6 +2214,7 @@ if desired_url_signature != current_url_signature:
 
 config = TimelineConfig(
     base_date=base_date,
+    airport_code=departure_airport,
     time_basis=str(time_basis),
     service_start_hour=int(service_start_hour),
     interval_min=int(interval_min),
@@ -2220,18 +2249,7 @@ except Exception as exc:
     st.error(f"Assignment Excel preparation failed: {exc}")
 
 timeline_layout = st.container(key="timeline_layout")
-content_main, content_spacer = timeline_layout.columns([1240, 496], gap="small")
-
-with content_spacer:
-    _render_team_assignment_editor(
-        summary=summary,
-        base_date=base_date,
-        dep_df=dep_df,
-        arr_df=arr_df,
-        config=config,
-        fig=fig,
-    )
-
+content_main, _ = timeline_layout.columns([1240, 496], gap="small")
 with content_main:
     with st.container(key="main_panel"):
         st.markdown(
@@ -2314,7 +2332,6 @@ with content_main:
                             width="stretch",
                             key="download_pdf_desktop",
                         )
-        _render_assignment_workbook_ui(base_date=base_date)
         with mobile_action_container:
             with st.container(key="mobile_action_set"):
                 st.button("Next day", key="btn_next_day_mobile", on_click=_next_day, width="stretch")
@@ -2580,6 +2597,15 @@ with content_main:
                     st.dataframe(pd.DataFrame(detail_rows), width="stretch", hide_index=True)
                 else:
                     st.info("No operation found in the selected period.")
+        _render_team_assignment_editor(
+            summary=summary,
+            base_date=base_date,
+            dep_df=dep_df,
+            arr_df=arr_df,
+            config=config,
+            fig=fig,
+        )
+        _render_assignment_workbook_ui(base_date=base_date)
         with st.expander("More details"):
             st.caption(
                 f"Service day: {base_date.strftime('%Y-%m-%d')} {int(service_start_hour):02d}:00 "
@@ -2634,6 +2660,19 @@ with content_main:
 - Turn-around는 Arrival 이후 일정 시간 안에 이어지는 Departure를 연결편으로 봅니다.
 - 기본적으로 REG 또는 SPOT 중 하나가 같고, Turn-around limit 안에 있으면 연결 후보가 됩니다.
 - 후보가 여러 개면 가장 가까운 다음 Departure 1개를 연결합니다.
+
+**차트 아래 숫자 — 최대 동시 조업 수**
+- 각 표시 시각을 중심으로 Overlap interval만큼의 구간에서 동시에 진행된 조업의 최대 개수를 표시합니다.
+- 예를 들어 30분 설정에서 09시 아래 숫자는 08:45~09:15 구간을 기준으로 합니다.
+- 검정색은 출발·도착 전체의 최대 동시 조업 수, 빨간색은 출발만의 최대값, 파란색은 도착만의 최대값입니다.
+- 세 값은 각각 계산합니다. 최대 시점이 서로 다를 수 있으므로 검정색은 빨간색과 파란색의 합과 다를 수 있습니다.
+- 조업 집중도와 인력 배치를 판단할 때 참고합니다.
+
+**Handling count by time range — 구간별 전체 조업 건수**
+- 선택 구간에 조업 시간이 조금이라도 겹치는 출발·도착 건수를 셉니다. 경계에 닿기만 하는 조업과 길이 0인 조업은 제외합니다.
+- 구간별 처리 물량과 대상 항공편을 확인할 때 사용합니다.
+- 예를 들어 08:45~09:15에 출발 조업 6건이 걸쳐 있어도 동시에 진행된 출발 조업은 최대 5건일 수 있습니다.
+- 차트 아래 숫자는 최대 동시 조업 수이고 이 기능은 전체 조업 건수이므로, 두 결과가 달라도 오류는 아닙니다.
 
 **URL 저장**
 - Airlines, Aircraft type, Labels on bars, Timeline Settings, Handling time, Turn-around limit 값은 URL에 반영됩니다.

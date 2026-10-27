@@ -105,13 +105,13 @@ class ScreenTests(unittest.TestCase):
         app.button(key="test_workload_calculate").click().run()
         self.assertTrue(app.warning)
         app.selectbox(key="test_workload_start_hour").set_value(23)
-        app.selectbox(key="test_workload_start_minute").set_value(50)
+        app.selectbox(key="test_workload_start_minute").set_value(55)
         app.selectbox(key="test_workload_end_hour").set_value(1)
-        app.selectbox(key="test_workload_end_minute").set_value(10)
+        app.selectbox(key="test_workload_end_minute").set_value(5)
         app.button(key="test_workload_calculate").click().run()
         self.assertFalse(app.exception)
-        self.assertEqual(app.session_state["test_workload_result"]["start"], dt("23:50"))
-        self.assertEqual(app.session_state["test_workload_result"]["end"], dt("01:10", 3))
+        self.assertEqual(app.session_state["test_workload_result"]["start"], dt("23:55"))
+        self.assertEqual(app.session_state["test_workload_result"]["end"], dt("01:05", 3))
 
     def test_english_expander_hour_minute_form_and_validation(self):
         app = AppTest.from_string(HARNESS.replace("chart_context=repr(before))", 'chart_context=repr(before),language="en")')).run()
@@ -124,7 +124,7 @@ class ScreenTests(unittest.TestCase):
         self.assertEqual(app.selectbox(key="test_workload_start_hour").options, [f"{hour:02d}" for hour in range(24)])
         for suffix in ("start_minute", "end_minute"):
             widget = app.selectbox(key=f"test_workload_{suffix}")
-            self.assertEqual(widget.options, ["00", "10", "20", "30", "40", "50"])
+            self.assertEqual(widget.options, [f"{minute:02d}" for minute in range(0, 60, 5)])
             self.assertEqual(widget.proto.form_id, "test_workload_form")
         self.assertEqual(app.button(key="test_workload_calculate").label, "Calculate")
         app.button(key="test_workload_calculate").click().run()

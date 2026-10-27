@@ -63,6 +63,7 @@ class TimelineConfig:
     show_team: bool = False
     show_turnaround: bool = False
     use_actual_schedule_dates: bool = False
+    airport_code: str = ""
 
 
 def departures_from_ubikais(records: list[dict[str, Any]]) -> pd.DataFrame:
@@ -151,6 +152,14 @@ def _build_timeline_figure(
         _max_overlaps_in_window(arr_intervals, t - half_window, t + half_window)
         for t in overlap_times
     ]
+    combined_intervals = pd.concat(
+        [intervals for intervals in (dep_intervals, arr_intervals) if not intervals.empty],
+        ignore_index=True,
+    )
+    total_counts = [
+        _max_overlaps_in_window(combined_intervals, t - half_window, t + half_window)
+        for t in overlap_times
+    ]
 
     turnaround_pairs = (
         _find_turnaround_pairs(
@@ -196,7 +205,8 @@ def _build_timeline_figure(
     ax = fig.subplots()
     fig.subplots_adjust(left=0.04, right=0.98, top=0.90, bottom=0.18)
 
-    ax.set_title("Flight Handling Timeline")
+    airport_label = icao_to_iata(config.airport_code)
+    ax.set_title(f"Flight Handling Timeline ({airport_label})" if airport_label else "Flight Handling Timeline")
     ax.text(
         0.01,
         1.02,
@@ -242,6 +252,7 @@ def _build_timeline_figure(
         display_times=overlap_times,
         dep_counts=dep_counts,
         arr_counts=arr_counts,
+        total_counts=total_counts,
     )
 
     summary = {
@@ -503,13 +514,13 @@ def _plot_overlap_numbers(
     display_times,
     dep_counts: list[int],
     arr_counts: list[int],
+    total_counts: list[int],
 ) -> None:
-    totals = [dep + arr for dep, arr in zip(dep_counts, arr_counts)]
     trans = transforms.blended_transform_factory(ax.transData, ax.transAxes)
     max_dep = max(dep_counts) if dep_counts else 1
     max_arr = max(arr_counts) if arr_counts else 1
 
-    for display_time, total, dep_count, arr_count in zip(display_times, totals, dep_counts, arr_counts):
+    for display_time, total, dep_count, arr_count in zip(display_times, total_counts, dep_counts, arr_counts):
         if total > 0:
             ax.text(display_time, -0.06, str(total), transform=trans, ha="center", va="top", fontsize=8, color="black")
         if dep_count > 0:

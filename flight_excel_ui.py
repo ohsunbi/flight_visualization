@@ -17,6 +17,10 @@ def _read_upload(data: bytes, direction: str):
     return read_schedule(data, direction)
 
 
+def _move_display_date(offset: int) -> None:
+    st.session_state["excel_display_date"] += timedelta(days=offset)
+
+
 def render_excel_mode() -> None:
     # These modes are mutually exclusive: reuse the UBIKAIS layout keys so the
     # existing width caps, column proportions and mobile CSS apply identically.
@@ -86,6 +90,17 @@ def _render_excel_content() -> None:
     if selected_date is None:
         st.info("표시할 날짜를 선택해 주세요.")
         return
+    previous_col, next_col = st.columns(2, gap="small")
+    with previous_col:
+        st.button(
+            "◀ 이전 날짜", key="excel_previous_date", width="stretch",
+            disabled=selected_date <= dates[0], on_click=_move_display_date, args=(-1,),
+        )
+    with next_col:
+        st.button(
+            "다음 날짜 ▶", key="excel_next_date", width="stretch",
+            disabled=selected_date >= dates[-1], on_click=_move_display_date, args=(1,),
+        )
     start = f"{selected_date:%Y-%m-%d} {start_hour:02d}:00"
     end = f"{selected_date + timedelta(days=1):%Y-%m-%d} {start_hour:02d}:00"
     if selected_date not in dates:
