@@ -13,6 +13,7 @@ from matplotlib import font_manager
 from matplotlib.figure import Figure
 
 from airport_codes import icao_to_iata
+from airline_codes import flight_label
 
 
 F_BEFORE = 20
@@ -1011,7 +1012,7 @@ def label_for(
 ) -> str:
     parts = []
     if show_flt:
-        parts.append(str(flt).replace("ESR", "ZE"))
+        parts.append(flight_label(flt))
     if show_des_org and pd.notna(route_code) and str(route_code).strip():
         parts.append(icao_to_iata(str(route_code)))
     if show_reg and pd.notna(reg) and str(reg).strip():
